@@ -5,7 +5,9 @@ import { AppConstants } from '@/lib/constants';
 
 interface FolderState {
   revision: number;
+  expandedIds: Set<string>;
   refresh: () => void;
+  toggleExpanded: (id: string) => void;
   createFolder: (name: string, parentId: string | null) => Promise<void>;
   renameFolder: (id: string, newName: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
@@ -13,8 +15,17 @@ interface FolderState {
 
 export const useFolderStore = create<FolderState>((set, get) => ({
   revision: 0,
+  expandedIds: new Set<string>(),
 
   refresh: () => set({ revision: get().revision + 1 }),
+
+  toggleExpanded: (id: string) =>
+    set((state) => {
+      const next = new Set(state.expandedIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { expandedIds: next };
+    }),
 
   createFolder: async (name: string, parentId: string | null) => {
     const depth = await folderDao.getChildDepth(parentId);

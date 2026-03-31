@@ -17,9 +17,10 @@ interface FolderNodeProps {
 }
 
 export function FolderNode({ info, depth, selectedIds, onToggleSelect, onContextMenu }: FolderNodeProps) {
-  const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FolderInfo[]>([]);
   const revision = useFolderStore((s) => s.revision);
+  const expanded = useFolderStore((s) => s.expandedIds.has(info.folder.id));
+  const toggleExpanded = useFolderStore((s) => s.toggleExpanded);
   const selected = selectedIds.has(info.folder.id);
   const hasChildren = info.subfolderCount > 0;
 
@@ -42,7 +43,7 @@ export function FolderNode({ info, depth, selectedIds, onToggleSelect, onContext
           selected && 'bg-primary/5',
         )}
         style={{ paddingLeft: `${8 + depth * 24}px` }}
-        onClick={() => hasChildren && setExpanded(!expanded)}
+        onClick={() => hasChildren && toggleExpanded(info.folder.id)}
         onContextMenu={(e) => {
           e.preventDefault();
           onContextMenu(info, e);
@@ -80,7 +81,7 @@ export function FolderNode({ info, depth, selectedIds, onToggleSelect, onContext
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setExpanded(!expanded);
+              toggleExpanded(info.folder.id);
             }}
             className="p-1 text-muted-foreground hover:text-foreground"
           >
