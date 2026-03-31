@@ -54,6 +54,9 @@ function mergeRecords<T extends { updatedAt: string }>(
 async function mergeAndPersist(remote: SyncPayload): Promise<void> {
   const local = await exportLocal();
 
+  // Union merge: all records from both sides are kept.
+  // For the same ID, the record with the newer updatedAt wins.
+  // Records are never deleted — data is only added or updated.
   const mergedFolders = mergeRecords(
     local.data.folders,
     remote.data.folders,
@@ -70,13 +73,12 @@ async function mergeAndPersist(remote: SyncPayload): Promise<void> {
     (s: CardState) => s.cardId,
   );
 
+  // Use bulkPut (upsert) instead of clear + bulkAdd so that
+  // no existing record is ever wiped before the merged data is written.
   await db.transaction('rw', [db.folders, db.cards, db.cardStates], async () => {
-    await db.folders.clear();
-    await db.cards.clear();
-    await db.cardStates.clear();
-    await db.folders.bulkAdd(mergedFolders);
-    await db.cards.bulkAdd(mergedCards);
-    await db.cardStates.bulkAdd(mergedStates);
+    await db.folders.bulkPut(mergedFolders);
+    await db.cards.bulkPut(mergedCards);
+    await db.cardStates.bulkPut(mergedStates);
   });
 }
 

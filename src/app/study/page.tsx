@@ -28,11 +28,15 @@ export default function StudySelectPage() {
     loadFolders();
   }, [loadFolders, revision]);
 
-  const toggleSelect = (id: string) => {
+  const toggleSelect = async (id: string) => {
+    const allIds = await folderDao.getSelfAndDescendantIds(id);
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        allIds.forEach((i) => next.delete(i));
+      } else {
+        allIds.forEach((i) => next.add(i));
+      }
       return next;
     });
   };
