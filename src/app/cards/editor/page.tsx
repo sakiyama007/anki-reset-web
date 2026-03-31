@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect } from 'react';
+import { Suspense, useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Trash2 } from 'lucide-react';
 import { cardDao } from '@/db/card-dao';
@@ -23,6 +23,11 @@ function CardEditorPage() {
   const [back, setBack] = useState('');
   const [saving, setSaving] = useState(false);
   const refresh = useFolderStore((s) => s.refresh);
+  const frontRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    frontRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (cardId) {
@@ -49,9 +54,9 @@ function CardEditorPage() {
     } else {
       await cardDao.insert(front.trim(), back.trim(), folderId);
       refresh();
-      // Continue creating
       setFront('');
       setBack('');
+      frontRef.current?.focus();
     }
 
     setSaving(false);
@@ -81,10 +86,10 @@ function CardEditorPage() {
         <div>
           <label className="text-sm font-medium mb-1 block">表面</label>
           <Textarea
+            ref={frontRef}
             value={front}
             onChange={(e) => setFront(e.target.value)}
             placeholder="表面のテキスト"
-            autoFocus
           />
         </div>
         <div>
