@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+非エンジニアの私にわかりやすく説明して、日本語で
+
 ## Commands
 
 ```bash

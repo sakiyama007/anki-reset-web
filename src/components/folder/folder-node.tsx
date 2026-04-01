@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Folder, FolderOpen, FolderClosed, ChevronRight, ChevronDown } from 'lucide-react';
+import { Folder, FolderOpen, FolderClosed, ChevronRight, ChevronDown, MoreVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { folderDao } from '@/db/folder-dao';
 import { useFolderStore } from '@/stores/folder-store';
@@ -75,6 +75,18 @@ export function FolderNode({ info, depth, selectedIds, onToggleSelect, onContext
           <div className="text-base font-semibold truncate">{info.folder.name}</div>
           <StudyCountChips info={info} />
         </div>
+
+        {/* ••• menu button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onContextMenu(info, e);
+          }}
+          className="p-1 text-muted-foreground hover:text-foreground"
+          aria-label="メニュー"
+        >
+          <MoreVertical size={20} />
+        </button>
 
         {/* Expand toggle */}
         {hasChildren ? (
