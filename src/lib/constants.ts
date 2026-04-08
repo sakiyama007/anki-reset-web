@@ -3,7 +3,7 @@ export const AppConstants = {
   pageSize: 50,
 
   // SM-2 parameters (Anki defaults)
-  learningStepsMinutes: [1, 10] as readonly number[],
+  learningStepsMinutes: [25 / 60, 10] as readonly number[], // 25秒, 10分
   graduatingInterval: 1,        // days (Good graduation)
   easyGraduationInterval: 4,    // days (Easy graduation)
   initialEaseFactor: 2.5,       // STARTING_EASE (250%)
