@@ -23,5 +23,5 @@ export const AppConstants = {
   minEaseFactor: 1.3,
 
   // Learn-ahead buffer
-  learnAheadMinutes: 1,
+  learnAheadMinutes: 0,
 } as const;

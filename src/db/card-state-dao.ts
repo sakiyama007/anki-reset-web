@@ -69,6 +69,24 @@ export const cardStateDao = {
     return dueStudyCards.map(({ card, cardState }) => ({ card, cardState }));
   },
 
+  async getNextLearnDue(folderIds: string[], now: Date): Promise<Date | null> {
+    if (folderIds.length === 0) return null;
+    const cards = await db.cards.where('folderId').anyOf(folderIds).toArray();
+    if (cards.length === 0) return null;
+    const cardIds = cards.map(c => c.id);
+    const states = await db.cardStates.where('cardId').anyOf(cardIds).toArray();
+
+    const nowIso = now.toISOString();
+    let earliest: Date | null = null;
+    for (const s of states) {
+      if ((s.state === 'learning' || s.state === 'relearning') && s.due > nowIso) {
+        const due = new Date(s.due);
+        if (!earliest || due < earliest) earliest = due;
+      }
+    }
+    return earliest;
+  },
+
   async getStudyCounts(folderIds: string[], now: Date): Promise<StudyCounts> {
     if (folderIds.length === 0) return { new: 0, learning: 0, review: 0 };
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, CheckCircle } from 'lucide-react';
 import { useStudyStore } from '@/stores/study-store';
@@ -26,11 +26,15 @@ function StudySessionPage() {
     counts,
     isLoading,
     isComplete,
+    isWaiting,
+    nextDueAt,
     startSession,
     flipCard,
     rateCard,
     reset,
   } = useStudyStore();
+
+  const [countdown, setCountdown] = useState<number>(0);
 
   useEffect(() => {
     if (foldersParam) {
@@ -40,13 +44,24 @@ function StudySessionPage() {
     return () => reset();
   }, [foldersParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!isWaiting || !nextDueAt) return;
+    const update = () => {
+      const remaining = Math.ceil((nextDueAt.getTime() - Date.now()) / 1000);
+      setCountdown(Math.max(0, remaining));
+    };
+    update();
+    const interval = setInterval(update, 500);
+    return () => clearInterval(interval);
+  }, [isWaiting, nextDueAt]);
+
   const currentCard = queue[currentIndex];
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isLoading || isComplete || !currentCard) return;
+      if (isLoading || isComplete || isWaiting || !currentCard) return;
       if (!isFlipped) {
-        if (e.key === 'Enter' || e.key === ' ') {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'k' || e.key === 'l' || e.key === ';' || e.key === ':') {
           e.preventDefault();
           flipCard();
         }
@@ -59,7 +74,7 @@ function StudySessionPage() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFlipped, isLoading, isComplete, currentCard, flipCard, rateCard]);
+  }, [isFlipped, isLoading, isComplete, isWaiting, currentCard, flipCard, rateCard]);
 
   return (
     <div className="flex flex-col h-[100dvh]">
@@ -77,10 +92,15 @@ function StudySessionPage() {
       {/* Content */}
       <div
         className="flex-1 flex flex-col items-center justify-center px-4 py-6 max-w-lg mx-auto w-full"
-        onClick={() => { if (!isFlipped && currentCard && !isLoading && !isComplete) flipCard(); }}
+        onClick={() => { if (!isFlipped && currentCard && !isLoading && !isComplete && !isWaiting) flipCard(); }}
       >
         {isLoading ? (
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+        ) : isWaiting ? (
+          <div className="flex flex-col items-center text-center">
+            <div className="text-5xl font-bold text-primary mb-3">{countdown}</div>
+            <p className="text-muted-foreground">次のカードまで待機中...</p>
+          </div>
         ) : isComplete ? (
           <div className="flex flex-col items-center text-center">
             <CheckCircle size={64} className="text-green-500 mb-4" />
@@ -101,7 +121,7 @@ function StudySessionPage() {
       </div>
 
       {/* Rating buttons */}
-      {!isLoading && !isComplete && isFlipped && currentCard && (
+      {!isLoading && !isComplete && !isWaiting && isFlipped && currentCard && (
         <div className="px-4 py-4 border-t border-border max-w-lg mx-auto w-full">
           <RatingButtons
             cardState={currentCard.cardState}

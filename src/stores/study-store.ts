@@ -11,11 +11,22 @@ interface StudyState {
   counts: StudyCounts;
   isLoading: boolean;
   isComplete: boolean;
+  isWaiting: boolean;
+  nextDueAt: Date | null;
 
   startSession: (folderIds: string[]) => Promise<void>;
   flipCard: () => void;
   rateCard: (rating: Rating) => Promise<void>;
   reset: () => void;
+}
+
+let waitTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearWaitTimer() {
+  if (waitTimer !== null) {
+    clearTimeout(waitTimer);
+    waitTimer = null;
+  }
 }
 
 export const useStudyStore = create<StudyState>((set, get) => ({
@@ -26,9 +37,12 @@ export const useStudyStore = create<StudyState>((set, get) => ({
   counts: { new: 0, learning: 0, review: 0 },
   isLoading: false,
   isComplete: false,
+  isWaiting: false,
+  nextDueAt: null,
 
   startSession: async (folderIds: string[]) => {
-    set({ isLoading: true, folderIds, isComplete: false, currentIndex: 0, isFlipped: false });
+    clearWaitTimer();
+    set({ isLoading: true, folderIds, isComplete: false, isWaiting: false, nextDueAt: null, currentIndex: 0, isFlipped: false });
     const now = new Date();
     const [queue, counts] = await Promise.all([
       studySessionService.getStudyQueue(folderIds, now),
@@ -45,6 +59,7 @@ export const useStudyStore = create<StudyState>((set, get) => ({
   flipCard: () => set({ isFlipped: true }),
 
   rateCard: async (rating: Rating) => {
+    clearWaitTimer();
     const { queue, currentIndex, folderIds } = get();
     const current = queue[currentIndex];
     if (!current) return;
@@ -52,20 +67,41 @@ export const useStudyStore = create<StudyState>((set, get) => ({
     const now = new Date();
     await studySessionService.answerCard(current.cardState, rating, now);
 
-    // Reload queue and counts
     const [newQueue, counts] = await Promise.all([
       studySessionService.getStudyQueue(folderIds, now),
       cardStateDao.getStudyCounts(folderIds, now),
     ]);
 
     if (newQueue.length === 0) {
-      set({ isComplete: true, queue: [], counts, isFlipped: false });
+      // Check if there are learning cards coming up soon
+      const nextDue = await cardStateDao.getNextLearnDue(folderIds, now);
+      if (nextDue) {
+        const delay = Math.max(0, nextDue.getTime() - Date.now());
+        set({ isWaiting: true, nextDueAt: nextDue, queue: [], counts, isFlipped: false });
+        waitTimer = setTimeout(async () => {
+          waitTimer = null;
+          const reloadNow = new Date();
+          const currentFolderIds = get().folderIds;
+          const [reloadQueue, reloadCounts] = await Promise.all([
+            studySessionService.getStudyQueue(currentFolderIds, reloadNow),
+            cardStateDao.getStudyCounts(currentFolderIds, reloadNow),
+          ]);
+          if (reloadQueue.length === 0) {
+            set({ isComplete: true, isWaiting: false, nextDueAt: null, queue: [], counts: reloadCounts });
+          } else {
+            set({ isWaiting: false, nextDueAt: null, queue: reloadQueue, currentIndex: 0, isFlipped: false, counts: reloadCounts });
+          }
+        }, delay);
+      } else {
+        set({ isComplete: true, queue: [], counts, isFlipped: false });
+      }
     } else {
       set({ queue: newQueue, currentIndex: 0, isFlipped: false, counts });
     }
   },
 
-  reset: () =>
+  reset: () => {
+    clearWaitTimer();
     set({
       folderIds: [],
       queue: [],
@@ -74,5 +110,8 @@ export const useStudyStore = create<StudyState>((set, get) => ({
       counts: { new: 0, learning: 0, review: 0 },
       isLoading: false,
       isComplete: false,
-    }),
+      isWaiting: false,
+      nextDueAt: null,
+    });
+  },
 }));
