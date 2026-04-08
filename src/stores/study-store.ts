@@ -13,6 +13,7 @@ interface StudyState {
   isComplete: boolean;
   isWaiting: boolean;
   nextDueAt: Date | null;
+  cardKey: number;
 
   startSession: (folderIds: string[]) => Promise<void>;
   flipCard: () => void;
@@ -39,6 +40,7 @@ export const useStudyStore = create<StudyState>((set, get) => ({
   isComplete: false,
   isWaiting: false,
   nextDueAt: null,
+  cardKey: 0,
 
   startSession: async (folderIds: string[]) => {
     clearWaitTimer();
@@ -77,7 +79,7 @@ export const useStudyStore = create<StudyState>((set, get) => ({
       const nextDue = await cardStateDao.getNextLearnDue(folderIds, now);
       if (nextDue) {
         const delay = Math.max(0, nextDue.getTime() - Date.now());
-        set({ isWaiting: true, nextDueAt: nextDue, queue: [], counts, isFlipped: false });
+        set({ isWaiting: true, nextDueAt: nextDue, queue: [], counts, isFlipped: false, cardKey: get().cardKey + 1 });
         waitTimer = setTimeout(async () => {
           waitTimer = null;
           const reloadNow = new Date();
@@ -89,14 +91,14 @@ export const useStudyStore = create<StudyState>((set, get) => ({
           if (reloadQueue.length === 0) {
             set({ isComplete: true, isWaiting: false, nextDueAt: null, queue: [], counts: reloadCounts });
           } else {
-            set({ isWaiting: false, nextDueAt: null, queue: reloadQueue, currentIndex: 0, isFlipped: false, counts: reloadCounts });
+            set({ isWaiting: false, nextDueAt: null, queue: reloadQueue, currentIndex: 0, isFlipped: false, counts: reloadCounts, cardKey: get().cardKey + 1 });
           }
         }, delay);
       } else {
         set({ isComplete: true, queue: [], counts, isFlipped: false });
       }
     } else {
-      set({ queue: newQueue, currentIndex: 0, isFlipped: false, counts });
+      set({ queue: newQueue, currentIndex: 0, isFlipped: false, counts, cardKey: get().cardKey + 1 });
     }
   },
 
@@ -112,6 +114,7 @@ export const useStudyStore = create<StudyState>((set, get) => ({
       isComplete: false,
       isWaiting: false,
       nextDueAt: null,
+      cardKey: 0,
     });
   },
 }));

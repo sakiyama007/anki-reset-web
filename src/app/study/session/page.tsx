@@ -28,6 +28,7 @@ function StudySessionPage() {
     isComplete,
     isWaiting,
     nextDueAt,
+    cardKey,
     startSession,
     flipCard,
     rateCard,
@@ -111,6 +112,7 @@ function StudySessionPage() {
         ) : currentCard ? (
           <>
             <Flashcard
+              key={cardKey}
               front={currentCard.card.front}
               back={currentCard.card.back}
               isFlipped={isFlipped}
