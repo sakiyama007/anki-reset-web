@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { FolderPlus, BookOpen, Trash2, X } from 'lucide-react';
 import { folderDao } from '@/db/folder-dao';
+import { deckOptionsDao } from '@/db/deck-options-dao';
 import { useFolderStore } from '@/stores/folder-store';
 import { FolderNode } from '@/components/folder/folder-node';
 import { FolderContextMenu } from '@/components/folder/folder-context-menu';
@@ -11,7 +12,32 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogTitle, DialogActions } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { AppShell } from '@/components/layout/app-shell';
-import type { FolderInfo } from '@/lib/types';
+import type { DeckOptions, FolderInfo } from '@/lib/types';
+
+type DeckOptionsForm = {
+  learningSteps: string;
+  relearningSteps: string;
+  graduatingInterval: string;
+  easyGraduationInterval: string;
+  newIntervalPercent: string;
+  minimumLapseInterval: string;
+  newCardsPerDay: string;
+  maxReviewsPerDay: string;
+  leechThreshold: string;
+  newCardInsertionOrder: DeckOptions['newCardInsertionOrder'];
+  reviewSortOrder: DeckOptions['reviewSortOrder'];
+};
+
+function stepsToString(steps: number[]): string {
+  return steps.join(' ');
+}
+
+function parseSteps(input: string): number[] {
+  return input
+    .split(/[\s,]+/)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+}
 
 export default function HomePage() {
   const router = useRouter();
@@ -26,11 +52,15 @@ export default function HomePage() {
   const [renameDialog, setRenameDialog] = useState<FolderInfo | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<FolderInfo | null>(null);
   const [deleteBatchConfirm, setDeleteBatchConfirm] = useState(false);
+  const [deckOptionsDialog, setDeckOptionsDialog] = useState<FolderInfo | null>(null);
+  const [deckOptionsForm, setDeckOptionsForm] = useState<DeckOptionsForm | null>(null);
+  const [hasOwnDeckOptions, setHasOwnDeckOptions] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [error, setError] = useState('');
+  const [deckOptionsError, setDeckOptionsError] = useState('');
 
   const revision = useFolderStore((s) => s.revision);
-  const { createFolder, renameFolder, deleteFolder } = useFolderStore();
+  const { createFolder, renameFolder, deleteFolder, refresh } = useFolderStore();
 
   const isSelecting = selectedIds.size > 0;
 
@@ -63,10 +93,11 @@ export default function HomePage() {
   const handleStudySelected = async () => {
     if (selectedIds.size === 0) return;
     const allIds: string[] = [];
-    for (const id of selectedIds) {
+    const rootIds = Array.from(selectedIds);
+    for (const id of rootIds) {
       allIds.push(...(await folderDao.getSelfAndDescendantIds(id)));
     }
-    router.push(`/study/session?folders=${allIds.join(',')}&name=${selectedIds.size}フォルダ`);
+    router.push(`/study/session?folders=${allIds.join(',')}&roots=${rootIds.join(',')}&name=${selectedIds.size}フォルダ`);
   };
 
   const handleDeleteSelected = async () => {
@@ -105,6 +136,72 @@ export default function HomePage() {
     if (!deleteDialog) return;
     await deleteFolder(deleteDialog.folder.id);
     setDeleteDialog(null);
+  };
+
+  const openDeckOptionsDialog = async (info: FolderInfo) => {
+    const [effective, own] = await Promise.all([
+      deckOptionsDao.getEffective(info.folder.id),
+      deckOptionsDao.getOwn(info.folder.id),
+    ]);
+    setHasOwnDeckOptions(!!own);
+    setDeckOptionsError('');
+    setDeckOptionsForm({
+      learningSteps: stepsToString(effective.learningStepsMinutes),
+      relearningSteps: stepsToString(effective.relearningStepsMinutes),
+      graduatingInterval: String(effective.graduatingInterval),
+      easyGraduationInterval: String(effective.easyGraduationInterval),
+      newIntervalPercent: String(Math.round(effective.lapseNewInterval * 100)),
+      minimumLapseInterval: String(effective.minimumLapseInterval),
+      newCardsPerDay: String(effective.newCardsPerDay),
+      maxReviewsPerDay: String(effective.maxReviewsPerDay),
+      leechThreshold: String(effective.leechThreshold),
+      newCardInsertionOrder: effective.newCardInsertionOrder,
+      reviewSortOrder: effective.reviewSortOrder,
+    });
+    setDeckOptionsDialog(info);
+  };
+
+  const handleSaveDeckOptions = async () => {
+    if (!deckOptionsDialog || !deckOptionsForm) return;
+
+    try {
+      const learningStepsMinutes = parseSteps(deckOptionsForm.learningSteps);
+      const relearningStepsMinutes = parseSteps(deckOptionsForm.relearningSteps);
+      if (learningStepsMinutes.length === 0 || relearningStepsMinutes.length === 0) {
+        throw new Error('学習ステップを1つ以上入力してください');
+      }
+
+      const current = await deckOptionsDao.getEffective(deckOptionsDialog.folder.id);
+      const nextOptions: DeckOptions = deckOptionsDao.normalize(deckOptionsDialog.folder.id, {
+        ...current,
+        learningStepsMinutes,
+        relearningStepsMinutes,
+        graduatingInterval: Number(deckOptionsForm.graduatingInterval),
+        easyGraduationInterval: Number(deckOptionsForm.easyGraduationInterval),
+        lapseNewInterval: Number(deckOptionsForm.newIntervalPercent) / 100,
+        minimumLapseInterval: Number(deckOptionsForm.minimumLapseInterval),
+        newCardsPerDay: Number(deckOptionsForm.newCardsPerDay),
+        maxReviewsPerDay: Number(deckOptionsForm.maxReviewsPerDay),
+        leechThreshold: Number(deckOptionsForm.leechThreshold),
+        newCardInsertionOrder: deckOptionsForm.newCardInsertionOrder,
+        reviewSortOrder: deckOptionsForm.reviewSortOrder,
+      });
+
+      await deckOptionsDao.upsert(nextOptions);
+      setDeckOptionsDialog(null);
+      setDeckOptionsForm(null);
+      refresh();
+    } catch (e: unknown) {
+      setDeckOptionsError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleClearDeckOptions = async () => {
+    if (!deckOptionsDialog) return;
+    await deckOptionsDao.clear(deckOptionsDialog.folder.id);
+    setDeckOptionsDialog(null);
+    setDeckOptionsForm(null);
+    refresh();
   };
 
   return (
@@ -199,6 +296,7 @@ export default function HomePage() {
             setError('');
             setCreateDialog({ parentId });
           }}
+          onDeckOptions={openDeckOptionsDialog}
           onRename={(info) => {
             setFolderName(info.folder.name);
             setError('');
@@ -238,6 +336,130 @@ export default function HomePage() {
         <DialogActions>
           <Button variant="ghost" onClick={() => setRenameDialog(null)}>キャンセル</Button>
           <Button onClick={handleRename}>変更</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={deckOptionsDialog !== null} onClose={() => setDeckOptionsDialog(null)} className="max-w-xl">
+        <DialogTitle>デッキ設定</DialogTitle>
+        {deckOptionsForm && (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="col-span-2 text-sm">
+              <span className="block mb-1">学習ステップ (分)</span>
+              <Input
+                value={deckOptionsForm.learningSteps}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, learningSteps: e.target.value })}
+              />
+            </label>
+            <label className="col-span-2 text-sm">
+              <span className="block mb-1">再学習ステップ (分)</span>
+              <Input
+                value={deckOptionsForm.relearningSteps}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, relearningSteps: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">卒業間隔(日)</span>
+              <Input
+                type="number"
+                min={1}
+                value={deckOptionsForm.graduatingInterval}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, graduatingInterval: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">Easy間隔(日)</span>
+              <Input
+                type="number"
+                min={1}
+                value={deckOptionsForm.easyGraduationInterval}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, easyGraduationInterval: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">New Interval(%)</span>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                value={deckOptionsForm.newIntervalPercent}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, newIntervalPercent: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">最小間隔(日)</span>
+              <Input
+                type="number"
+                min={1}
+                value={deckOptionsForm.minimumLapseInterval}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, minimumLapseInterval: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">新規/日</span>
+              <Input
+                type="number"
+                min={0}
+                value={deckOptionsForm.newCardsPerDay}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, newCardsPerDay: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">復習/日</span>
+              <Input
+                type="number"
+                min={0}
+                value={deckOptionsForm.maxReviewsPerDay}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, maxReviewsPerDay: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">Leech閾値</span>
+              <Input
+                type="number"
+                min={1}
+                value={deckOptionsForm.leechThreshold}
+                onChange={(e) => setDeckOptionsForm({ ...deckOptionsForm, leechThreshold: e.target.value })}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">新規カード順</span>
+              <select
+                value={deckOptionsForm.newCardInsertionOrder}
+                onChange={(e) => setDeckOptionsForm({
+                  ...deckOptionsForm,
+                  newCardInsertionOrder: e.target.value as DeckOptions['newCardInsertionOrder'],
+                })}
+                className="flex h-10 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="sequential">順番</option>
+                <option value="random">ランダム</option>
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1">復習ソート</span>
+              <select
+                value={deckOptionsForm.reviewSortOrder}
+                onChange={(e) => setDeckOptionsForm({
+                  ...deckOptionsForm,
+                  reviewSortOrder: e.target.value as DeckOptions['reviewSortOrder'],
+                })}
+                className="flex h-10 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="dueAscRandom">期限順+乱択</option>
+                <option value="dueAsc">期限順</option>
+              </select>
+            </label>
+          </div>
+        )}
+        {deckOptionsError && <p className="text-red-500 text-sm mt-3">{deckOptionsError}</p>}
+        <DialogActions>
+          {hasOwnDeckOptions && (
+            <Button variant="ghost" onClick={handleClearDeckOptions}>
+              親設定に戻す
+            </Button>
+          )}
+          <Button variant="ghost" onClick={() => setDeckOptionsDialog(null)}>キャンセル</Button>
+          <Button onClick={handleSaveDeckOptions}>保存</Button>
         </DialogActions>
       </Dialog>
 

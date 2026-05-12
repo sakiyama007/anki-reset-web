@@ -1,7 +1,6 @@
 import { db } from './database';
 import type { Folder, FolderInfo, StudyCounts } from '@/lib/types';
-import { generateId, nowISO } from '@/lib/utils';
-import { AppConstants } from '@/lib/constants';
+import { generateId, getSchedulerPreferences, jstDayStart, nowISO } from '@/lib/utils';
 
 export const folderDao = {
   async insert(name: string, parentId: string | null): Promise<Folder> {
@@ -97,6 +96,26 @@ export const folderDao = {
     return [folderId, ...descendants];
   },
 
+  async getSelectedRootIds(selectedIds: string[]): Promise<string[]> {
+    const uniqueSelectedIds = [...new Set(selectedIds)];
+    if (uniqueSelectedIds.length === 0) return [];
+
+    const selectedSet = new Set(uniqueSelectedIds);
+    const folders = await this.getAll();
+    const parentById = new Map(folders.map((folder) => [folder.id, folder.parentId]));
+
+    return uniqueSelectedIds.filter((folderId) => {
+      let currentId = parentById.get(folderId) ?? null;
+      while (currentId) {
+        if (selectedSet.has(currentId)) {
+          return false;
+        }
+        currentId = parentById.get(currentId) ?? null;
+      }
+      return true;
+    });
+  },
+
   async nameExistsAtLevel(name: string, parentId: string | null, excludeId?: string): Promise<boolean> {
     const siblings = await this.getChildren(parentId);
     return siblings.some(f => f.name === name && f.id !== excludeId);
@@ -111,11 +130,12 @@ export const folderDao = {
   },
 
   async getStudyCounts(folderId: string, now: Date): Promise<StudyCounts> {
-    const learnAhead = new Date(now.getTime() + AppConstants.learnAheadMinutes * 60000).toISOString();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const schedulerPreferences = getSchedulerPreferences();
+    const learnAhead = new Date(now.getTime() + schedulerPreferences.learnAheadMinutes * 60000).toISOString();
+    const today = jstDayStart(now, schedulerPreferences.nextDayStartsHour).toISOString();
 
     const cards = await db.cards.where('folderId').equals(folderId)
-      .filter(c => !c.isDeleted).toArray();
+      .filter(c => !c.isDeleted && !c.isSuspended).toArray();
     const cardIds = cards.map(c => c.id);
     if (cardIds.length === 0) return { new: 0, learning: 0, review: 0 };
 

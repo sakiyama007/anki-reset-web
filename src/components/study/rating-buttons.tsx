@@ -2,10 +2,11 @@
 
 import { previewDue } from '@/services/sm2-engine';
 import { formatDuePreview } from '@/lib/utils';
-import type { CardState, Rating } from '@/lib/types';
+import type { CardState, DeckOptions, Rating } from '@/lib/types';
 
 interface RatingButtonsProps {
   cardState: CardState;
+  deckOptions: DeckOptions;
   onRate: (rating: Rating) => void;
 }
 
@@ -16,13 +17,13 @@ const ratings: Array<{ rating: Rating; label: string; color: string; hoverColor:
   { rating: 'easy', label: '簡単', color: 'bg-blue-500', hoverColor: 'hover:bg-blue-600', key: ':' },
 ];
 
-export function RatingButtons({ cardState, onRate }: RatingButtonsProps) {
+export function RatingButtons({ cardState, deckOptions, onRate }: RatingButtonsProps) {
   const now = new Date();
 
   return (
     <div className="grid grid-cols-4 gap-2">
       {ratings.map(({ rating, label, color, hoverColor, key }) => {
-        const nextDue = previewDue(cardState, rating, now);
+        const nextDue = previewDue(cardState, rating, now, deckOptions);
         const preview = formatDuePreview(nextDue, now);
 
         return (

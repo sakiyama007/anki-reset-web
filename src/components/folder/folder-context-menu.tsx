@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { List, Plus, FolderPlus, Pencil, Trash2 } from 'lucide-react';
+import { List, Plus, FolderPlus, Pencil, SlidersHorizontal, Trash2 } from 'lucide-react';
 import type { FolderInfo } from '@/lib/types';
 
 interface ContextMenuProps {
@@ -11,6 +11,7 @@ interface ContextMenuProps {
   onCardList: (info: FolderInfo) => void;
   onAddCard: (folderId: string) => void;
   onAddSubfolder: (parentId: string) => void;
+  onDeckOptions: (info: FolderInfo) => void;
   onRename: (info: FolderInfo) => void;
   onDelete: (info: FolderInfo) => void;
 }
@@ -22,6 +23,7 @@ export function FolderContextMenu({
   onCardList,
   onAddCard,
   onAddSubfolder,
+  onDeckOptions,
   onRename,
   onDelete,
 }: ContextMenuProps) {
@@ -41,6 +43,7 @@ export function FolderContextMenu({
     { label: 'カード一覧', icon: List, action: () => onCardList(info) },
     { label: 'カードを追加', icon: Plus, action: () => onAddCard(info.folder.id) },
     { label: 'サブフォルダを追加', icon: FolderPlus, action: () => onAddSubfolder(info.folder.id) },
+    { label: 'デッキ設定', icon: SlidersHorizontal, action: () => onDeckOptions(info) },
     { label: '名前変更', icon: Pencil, action: () => onRename(info) },
     { label: '削除', icon: Trash2, action: () => onDelete(info), destructive: true },
   ];

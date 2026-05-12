@@ -14,7 +14,16 @@ import { folderDao } from '@/db/folder-dao';
 import { cn } from '@/lib/utils';
 
 export default function SettingsPage() {
-  const { theme, setTheme, lastSyncAt, setLastSyncAt } = useSettingsStore();
+  const {
+    theme,
+    setTheme,
+    lastSyncAt,
+    setLastSyncAt,
+    nextDayStartsHour,
+    setNextDayStartsHour,
+    learnAheadMinutes,
+    setLearnAheadMinutes,
+  } = useSettingsStore();
   const refresh = useFolderStore((s) => s.refresh);
   const [stats, setStats] = useState<{ cards: number; folders: number } | null>(null);
   const [importResult, setImportResult] = useState<string | null>(null);
@@ -133,6 +142,34 @@ export default function SettingsPage() {
                   <span className="text-xs">{label}</span>
                 </button>
               ))}
+            </div>
+          </section>
+
+          <section>
+            <h2 className="text-sm font-semibold text-muted-foreground mb-3">学習スケジューラ</h2>
+            <div className="space-y-3 rounded-lg border border-border p-4">
+              <label className="block">
+                <span className="text-sm block mb-1">日付の切り替え時刻 (JST)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={nextDayStartsHour}
+                  onChange={(e) => setNextDayStartsHour(Number(e.target.value))}
+                  className="flex h-10 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm block mb-1">Learn ahead 分</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={learnAheadMinutes}
+                  onChange={(e) => setLearnAheadMinutes(Number(e.target.value))}
+                  className="flex h-10 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+              </label>
             </div>
           </section>
 

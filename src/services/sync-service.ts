@@ -1,29 +1,22 @@
 import { db } from '@/db/database';
 import { findSyncFile, downloadSyncFile, uploadSyncFile } from '@/lib/google-drive';
-import type { SyncPayload, Folder, FlashCard, CardState } from '@/lib/types';
-
-function getDeviceId(): string {
-  if (typeof window === 'undefined') return 'unknown';
-  let id = localStorage.getItem('anki-reset-device-id');
-  if (!id) {
-    id = 'web-' + crypto.randomUUID();
-    localStorage.setItem('anki-reset-device-id', id);
-  }
-  return id;
-}
+import { getDeviceId } from '@/lib/utils';
+import type { SyncPayload, Folder, FlashCard, CardState, DeckOptions, Revlog } from '@/lib/types';
 
 async function exportLocal(): Promise<SyncPayload> {
-  const [folders, cards, cardStates] = await Promise.all([
+  const [folders, cards, cardStates, deckOptions, revlogs] = await Promise.all([
     db.folders.toArray(),
     db.cards.toArray(),
     db.cardStates.toArray(),
+    db.deckOptions.toArray(),
+    db.revlogs.toArray(),
   ]);
 
   return {
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     deviceId: getDeviceId(),
-    data: { folders, cards, cardStates },
+    data: { folders, cards, cardStates, deckOptions, revlogs },
   };
 }
 
@@ -121,13 +114,25 @@ async function mergeAndPersist(remote: SyncPayload): Promise<void> {
     remote.data.cardStates ?? [],  // 学習状況も必ず同期する
     (s: CardState) => s.cardId,
   );
+  const mergedDeckOptions = mergeRecords(
+    local.data.deckOptions ?? [],
+    remote.data.deckOptions ?? [],
+    (options: DeckOptions) => options.folderId,
+  );
+  const mergedRevlogs = mergeRecords(
+    local.data.revlogs ?? [],
+    remote.data.revlogs ?? [],
+    (log: Revlog) => log.id,
+  );
 
   // Use bulkPut (upsert) instead of clear + bulkAdd so that
   // no existing record is ever wiped before the merged data is written.
-  await db.transaction('rw', [db.folders, db.cards, db.cardStates], async () => {
+  await db.transaction('rw', [db.folders, db.cards, db.cardStates, db.deckOptions, db.revlogs], async () => {
     await db.folders.bulkPut(mergedFolders);
     await db.cards.bulkPut(mergedCards);
     await db.cardStates.bulkPut(mergedStates);
+    await db.deckOptions.bulkPut(mergedDeckOptions);
+    await db.revlogs.bulkPut(mergedRevlogs);
   });
 }
 
@@ -141,7 +146,7 @@ export const syncService = {
     if (fileId) {
       const content = await downloadSyncFile(token, fileId);
       const remote: SyncPayload = JSON.parse(content);
-      if (remote.version === 1) {
+      if (remote.version === 1 || remote.version === 2) {
         await mergeAndPersist(remote);
         pulled = true;
       }

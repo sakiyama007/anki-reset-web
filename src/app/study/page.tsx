@@ -44,10 +44,11 @@ export default function StudySelectPage() {
   const handleStartStudy = async () => {
     if (selectedIds.size === 0) return;
     const allIds: string[] = [];
-    for (const id of selectedIds) {
+    const rootIds = Array.from(selectedIds);
+    for (const id of rootIds) {
       allIds.push(...(await folderDao.getSelfAndDescendantIds(id)));
     }
-    router.push(`/study/session?folders=${allIds.join(',')}&name=${selectedIds.size}フォルダ`);
+    router.push(`/study/session?folders=${allIds.join(',')}&roots=${rootIds.join(',')}&name=${selectedIds.size}フォルダ`);
   };
 
   return (

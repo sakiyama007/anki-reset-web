@@ -1,6 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { AppConstants } from './constants';
+import type { SchedulerPreferences } from './types';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -14,18 +16,75 @@ export function nowISO(): string {
   return new Date().toISOString();
 }
 
+export function getDeviceId(): string {
+  if (typeof window === 'undefined') return 'unknown';
+  let id = localStorage.getItem('anki-reset-device-id');
+  if (!id) {
+    id = 'web-' + crypto.randomUUID();
+    localStorage.setItem('anki-reset-device-id', id);
+  }
+  return id;
+}
+
+export function getSchedulerPreferences(): SchedulerPreferences {
+  if (typeof window === 'undefined') {
+    return {
+      nextDayStartsHour: AppConstants.defaultNextDayStartsHour,
+      learnAheadMinutes: AppConstants.defaultLearnAheadMinutes,
+    };
+  }
+
+  try {
+    const raw = localStorage.getItem('anki-reset-settings');
+    if (!raw) {
+      return {
+        nextDayStartsHour: AppConstants.defaultNextDayStartsHour,
+        learnAheadMinutes: AppConstants.defaultLearnAheadMinutes,
+      };
+    }
+
+    const parsed = JSON.parse(raw) as { state?: Partial<SchedulerPreferences> };
+    const nextDayStartsHour = parsed.state?.nextDayStartsHour;
+    const learnAheadMinutes = parsed.state?.learnAheadMinutes;
+
+    return {
+      nextDayStartsHour: typeof nextDayStartsHour === 'number'
+        ? Math.min(23, Math.max(0, Math.round(nextDayStartsHour)))
+        : AppConstants.defaultNextDayStartsHour,
+      learnAheadMinutes: typeof learnAheadMinutes === 'number'
+        ? Math.max(0, learnAheadMinutes)
+        : AppConstants.defaultLearnAheadMinutes,
+    };
+  } catch {
+    return {
+      nextDayStartsHour: AppConstants.defaultNextDayStartsHour,
+      learnAheadMinutes: AppConstants.defaultLearnAheadMinutes,
+    };
+  }
+}
+
 /**
- * 日本標準時 (JST = UTC+9) での当日 0:00 を UTC ベースの Date で返す。
- * JST は通年 UTC+9 固定（サマータイムなし）なので計算が安定する。
- * 例: 2024-01-15 10:00 JST → 2024-01-14T15:00:00.000Z
+ * 日本標準時 (JST = UTC+9) での日付境界時刻を UTC ベースの Date で返す。
+ * 既定は 4:00 JST。
  */
-export function jstMidnight(date: Date): Date {
+export function jstDayStart(date: Date, nextDayStartsHour = getSchedulerPreferences().nextDayStartsHour): Date {
   const JST_OFFSET_MS = 9 * 60 * 60 * 1000; // UTC+9
-  const jstDate = new Date(date.getTime() + JST_OFFSET_MS);
+  const adjusted = new Date(
+    date.getTime() + JST_OFFSET_MS - nextDayStartsHour * 60 * 60 * 1000,
+  );
   return new Date(
-    Date.UTC(jstDate.getUTCFullYear(), jstDate.getUTCMonth(), jstDate.getUTCDate())
+    Date.UTC(
+      adjusted.getUTCFullYear(),
+      adjusted.getUTCMonth(),
+      adjusted.getUTCDate(),
+      nextDayStartsHour,
+    )
     - JST_OFFSET_MS,
   );
+}
+
+export function jstMidnight(date: Date): Date {
+  return jstDayStart(date, 0);
 }
 
 export function formatDuePreview(dueDate: Date, now: Date): string {

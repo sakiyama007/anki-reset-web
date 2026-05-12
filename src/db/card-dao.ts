@@ -13,6 +13,8 @@ export const cardDao = {
       folderId,
       createdAt: now,
       updatedAt: now,
+      isSuspended: false,
+      isLeech: false,
     };
     const state: CardState = {
       cardId: card.id,
@@ -48,6 +50,8 @@ export const cardDao = {
         folderId: c.folderId,
         createdAt: now,
         updatedAt: now,
+        isSuspended: false,
+        isLeech: false,
       });
       states.push({
         cardId: id,

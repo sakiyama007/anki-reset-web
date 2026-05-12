@@ -17,6 +17,7 @@ function StudySessionPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const foldersParam = searchParams.get('folders') ?? '';
+  const rootsParam = searchParams.get('roots') ?? '';
   const name = searchParams.get('name') ?? '学習';
 
   const {
@@ -40,10 +41,11 @@ function StudySessionPage() {
   useEffect(() => {
     if (foldersParam) {
       const ids = foldersParam.split(',').filter(Boolean);
-      startSession(ids);
+      const rootIds = rootsParam.split(',').filter(Boolean);
+      startSession(ids, rootIds.length > 0 ? rootIds : ids);
     }
     return () => reset();
-  }, [foldersParam]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [foldersParam, rootsParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!isWaiting || !nextDueAt) return;
@@ -127,6 +129,7 @@ function StudySessionPage() {
         <div className="px-4 py-4 border-t border-border max-w-lg mx-auto w-full">
           <RatingButtons
             cardState={currentCard.cardState}
+            deckOptions={currentCard.deckOptions}
             onRate={rateCard}
           />
         </div>

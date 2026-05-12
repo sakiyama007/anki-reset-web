@@ -1,10 +1,12 @@
 import Dexie, { type Table } from 'dexie';
-import type { Folder, FlashCard, CardState } from '@/lib/types';
+import type { Folder, FlashCard, CardState, DeckOptions, Revlog } from '@/lib/types';
 
 class AnkiResetDB extends Dexie {
   folders!: Table<Folder, string>;
   cards!: Table<FlashCard, string>;
   cardStates!: Table<CardState, string>;
+  deckOptions!: Table<DeckOptions, string>;
+  revlogs!: Table<Revlog, string>;
 
   constructor() {
     super('anki-reset');
@@ -18,6 +20,13 @@ class AnkiResetDB extends Dexie {
       folders: 'id, parentId, name, updatedAt, isDeleted',
       cards: 'id, folderId, createdAt, updatedAt, isDeleted',
       cardStates: 'cardId, state, due, updatedAt',
+    });
+    this.version(3).stores({
+      folders: 'id, parentId, name, updatedAt, isDeleted',
+      cards: 'id, folderId, createdAt, updatedAt, isDeleted, isSuspended',
+      cardStates: 'cardId, state, due, updatedAt',
+      deckOptions: 'folderId, updatedAt',
+      revlogs: 'id, cardId, folderId, reviewedAt, updatedAt',
     });
   }
 }
