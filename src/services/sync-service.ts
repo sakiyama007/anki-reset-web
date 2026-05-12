@@ -51,6 +51,54 @@ function mergeRecords<T extends { updatedAt: string }>(
   return Array.from(map.values());
 }
 
+function bumpIso(iso: string): string {
+  return new Date(new Date(iso).getTime() + 1).toISOString();
+}
+
+function mergeSoftDeleteRecords<T extends { updatedAt: string; isDeleted?: boolean }>(
+  local: T[],
+  remote: T[],
+  getKey: (item: T) => string,
+): T[] {
+  const map = new Map<string, T>();
+
+  for (const item of local) {
+    map.set(getKey(item), item);
+  }
+
+  for (const item of remote) {
+    const key = getKey(item);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, item);
+      continue;
+    }
+
+    const existingDeleted = !!existing.isDeleted;
+    const incomingDeleted = !!item.isDeleted;
+
+    // If either side is deleted, keep it deleted to prevent sync resurrection.
+    if (existingDeleted !== incomingDeleted) {
+      const deleted = existingDeleted ? existing : item;
+      const latestUpdatedAt = deleted.updatedAt > (existingDeleted ? item.updatedAt : existing.updatedAt)
+        ? deleted.updatedAt
+        : (existingDeleted ? item.updatedAt : existing.updatedAt);
+      map.set(key, {
+        ...deleted,
+        isDeleted: true,
+        updatedAt: bumpIso(latestUpdatedAt),
+      });
+      continue;
+    }
+
+    if (item.updatedAt > existing.updatedAt) {
+      map.set(key, item);
+    }
+  }
+
+  return Array.from(map.values());
+}
+
 async function mergeAndPersist(remote: SyncPayload): Promise<void> {
   const local = await exportLocal();
 
@@ -58,12 +106,12 @@ async function mergeAndPersist(remote: SyncPayload): Promise<void> {
   // For the same ID, the record with the newer updatedAt wins.
   // Records are never deleted — data is only added or updated.
   // ?? [] は旧バージョンのペイロードに該当フィールドがない場合の防御。
-  const mergedFolders = mergeRecords(
+  const mergedFolders = mergeSoftDeleteRecords(
     local.data.folders,
     remote.data.folders ?? [],
     (f: Folder) => f.id,
   );
-  const mergedCards = mergeRecords(
+  const mergedCards = mergeSoftDeleteRecords(
     local.data.cards,
     remote.data.cards ?? [],
     (c: FlashCard) => c.id,
