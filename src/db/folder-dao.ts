@@ -22,19 +22,18 @@ export const folderDao = {
   },
 
   async delete(id: string): Promise<void> {
-    // Delete all descendants recursively
+    // Soft-delete: mark folder + all descendants + their cards as isDeleted
     const descendantIds = await this.getDescendantIds(id);
     const allIds = [id, ...descendantIds];
+    const now = nowISO();
 
-    await db.transaction('rw', [db.folders, db.cards, db.cardStates], async () => {
-      // Delete card states for cards in these folders
-      const cards = await db.cards.where('folderId').anyOf(allIds).toArray();
-      const cardIds = cards.map(c => c.id);
-      if (cardIds.length > 0) {
-        await db.cardStates.where('cardId').anyOf(cardIds).delete();
-        await db.cards.where('folderId').anyOf(allIds).delete();
-      }
-      await db.folders.where('id').anyOf(allIds).delete();
+    await db.transaction('rw', [db.folders, db.cards], async () => {
+      // Soft-delete cards in these folders
+      await db.cards.where('folderId').anyOf(allIds)
+        .modify({ isDeleted: true, updatedAt: now });
+      // Soft-delete the folders themselves
+      await db.folders.where('id').anyOf(allIds)
+        .modify({ isDeleted: true, updatedAt: now });
     });
   },
 
@@ -43,23 +42,23 @@ export const folderDao = {
   },
 
   async getChildren(parentId: string | null): Promise<Folder[]> {
-    const folders = parentId === null
-      ? await db.folders.where('parentId').equals('').toArray()
-      : await db.folders.where('parentId').equals(parentId).toArray();
-
     // Dexie can't index null well, so for root folders query all and filter
     if (parentId === null) {
       const all = await db.folders.toArray();
       return all
-        .filter(f => f.parentId === null || f.parentId === undefined)
+        .filter(f => !f.isDeleted && (f.parentId === null || f.parentId === undefined))
         .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
     }
 
-    return folders.sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+    const folders = await db.folders.where('parentId').equals(parentId).toArray();
+    return folders
+      .filter(f => !f.isDeleted)
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
   },
 
   async getAll(): Promise<Folder[]> {
-    return db.folders.toArray();
+    const all = await db.folders.toArray();
+    return all.filter(f => !f.isDeleted);
   },
 
   async getDepth(folderId: string): Promise<number> {
@@ -82,7 +81,9 @@ export const folderDao = {
     const queue = [folderId];
     while (queue.length > 0) {
       const currentId = queue.shift()!;
-      const children = await db.folders.where('parentId').equals(currentId).toArray();
+      const children = await db.folders.where('parentId').equals(currentId)
+        .filter(f => !f.isDeleted)
+        .toArray();
       for (const child of children) {
         result.push(child.id);
         queue.push(child.id);
@@ -102,18 +103,19 @@ export const folderDao = {
   },
 
   async getCardCount(folderId: string): Promise<number> {
-    return db.cards.where('folderId').equals(folderId).count();
+    return db.cards.where('folderId').equals(folderId).filter(c => !c.isDeleted).count();
   },
 
   async getSubfolderCount(folderId: string): Promise<number> {
-    return db.folders.where('parentId').equals(folderId).count();
+    return db.folders.where('parentId').equals(folderId).filter(f => !f.isDeleted).count();
   },
 
   async getStudyCounts(folderId: string, now: Date): Promise<StudyCounts> {
     const learnAhead = new Date(now.getTime() + AppConstants.learnAheadMinutes * 60000).toISOString();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
-    const cards = await db.cards.where('folderId').equals(folderId).toArray();
+    const cards = await db.cards.where('folderId').equals(folderId)
+      .filter(c => !c.isDeleted).toArray();
     const cardIds = cards.map(c => c.id);
     if (cardIds.length === 0) return { new: 0, learning: 0, review: 0 };
 

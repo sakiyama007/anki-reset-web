@@ -73,18 +73,14 @@ export const cardDao = {
   },
 
   async delete(id: string): Promise<void> {
-    await db.transaction('rw', [db.cards, db.cardStates], async () => {
-      await db.cardStates.delete(id);
-      await db.cards.delete(id);
-    });
+    const now = nowISO();
+    await db.cards.update(id, { isDeleted: true, updatedAt: now });
   },
 
   async deleteBatch(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
-    await db.transaction('rw', [db.cards, db.cardStates], async () => {
-      await db.cardStates.where('cardId').anyOf(ids).delete();
-      await db.cards.where('id').anyOf(ids).delete();
-    });
+    const now = nowISO();
+    await db.cards.where('id').anyOf(ids).modify({ isDeleted: true, updatedAt: now });
   },
 
   async moveToFolder(cardIds: string[], folderId: string): Promise<void> {
@@ -105,14 +101,12 @@ export const cardDao = {
     limit = AppConstants.pageSize,
     offset = 0,
   ): Promise<FlashCard[]> {
-    return db.cards
-      .where('folderId')
-      .equals(folderId)
-      .reverse()
-      .offset(offset)
-      .limit(limit)
-      .sortBy('createdAt')
-      .then(arr => arr.reverse());
+    const all = await db.cards
+      .where('folderId').equals(folderId)
+      .filter(c => !c.isDeleted)
+      .toArray();
+    all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return all.slice(offset, offset + limit);
   },
 
   async search(
@@ -128,17 +122,18 @@ export const cardDao = {
 
     const all = await collection.toArray();
     const filtered = all.filter(
-      c => c.front.toLowerCase().includes(lowerQ) || c.back.toLowerCase().includes(lowerQ),
+      c => !c.isDeleted &&
+        (c.front.toLowerCase().includes(lowerQ) || c.back.toLowerCase().includes(lowerQ)),
     );
     filtered.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return filtered.slice(offset, offset + limit);
   },
 
   async getCountByFolder(folderId: string): Promise<number> {
-    return db.cards.where('folderId').equals(folderId).count();
+    return db.cards.where('folderId').equals(folderId).filter(c => !c.isDeleted).count();
   },
 
   async getTotalCount(): Promise<number> {
-    return db.cards.count();
+    return db.cards.filter(c => !c.isDeleted).count();
   },
 };

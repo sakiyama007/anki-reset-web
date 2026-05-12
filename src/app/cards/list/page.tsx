@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Search, Trash2, X, Check } from 'lucide-react';
 import { cardDao } from '@/db/card-dao';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogTitle, DialogActions } from '@/components/ui/dialog';
 import type { FlashCard } from '@/lib/types';
 import { AppConstants } from '@/lib/constants';
 
@@ -25,6 +26,7 @@ function CardListPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelecting, setIsSelecting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const offsetRef = useRef(0);
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -74,6 +76,7 @@ function CardListPage() {
     await cardDao.deleteBatch(Array.from(selectedIds));
     setSelectedIds(new Set());
     setIsSelecting(false);
+    setDeleteConfirm(false);
     loadCards(true);
   };
 
@@ -82,7 +85,7 @@ function CardListPage() {
   };
 
   return (
-    <div className="flex flex-col h-[100dvh]">
+    <div className="flex flex-col h-[100dvh]" onClick={(e) => e.stopPropagation()}>
       {/* Header */}
       <header className="px-4 py-3 border-b border-border bg-background sticky top-0 z-10">
         <div className="flex items-center gap-2">
@@ -91,7 +94,7 @@ function CardListPage() {
             <>
               <span className="flex-1 font-semibold">{selectedIds.size}件選択</span>
               <Button size="sm" variant="ghost" onClick={selectAll}><Check size={16} className="mr-1" /> 全選択</Button>
-              <Button size="sm" variant="destructive" onClick={handleDeleteSelected}><Trash2 size={16} /></Button>
+              <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(true)}><Trash2 size={16} /></Button>
               <Button size="sm" variant="ghost" onClick={() => {
                 setIsSelecting(false);
                 setSelectedIds(new Set());
@@ -174,6 +177,19 @@ function CardListPage() {
           </div>
         )}
       </div>
+
+      {/* Delete confirm dialog */}
+      <Dialog open={deleteConfirm} onClose={() => setDeleteConfirm(false)}>
+        <DialogTitle>カード削除</DialogTitle>
+        <p className="text-sm">
+          {selectedIds.size}枚のカードを削除しますか？
+          <br />この操作は取り消せません。
+        </p>
+        <DialogActions>
+          <Button variant="ghost" onClick={() => setDeleteConfirm(false)}>キャンセル</Button>
+          <Button variant="destructive" onClick={handleDeleteSelected}>削除</Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 }

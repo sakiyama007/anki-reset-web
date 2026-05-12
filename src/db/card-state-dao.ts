@@ -1,6 +1,7 @@
 import { db } from './database';
 import type { CardState, StudyCard, StudyCounts } from '@/lib/types';
 import { AppConstants } from '@/lib/constants';
+import { jstMidnight } from '@/lib/utils';
 
 export const cardStateDao = {
   async insert(state: CardState): Promise<void> {
@@ -19,10 +20,11 @@ export const cardStateDao = {
     if (folderIds.length === 0) return [];
 
     const learnAhead = new Date(now.getTime() + AppConstants.learnAheadMinutes * 60000).toISOString();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const today = jstMidnight(now).toISOString(); // 日本時間での当日0:00
 
-    // Get all cards in the given folders
-    const cards = await db.cards.where('folderId').anyOf(folderIds).toArray();
+    // Get all non-deleted cards in the given folders
+    const cards = (await db.cards.where('folderId').anyOf(folderIds).toArray())
+      .filter(c => !c.isDeleted);
     if (cards.length === 0) return [];
 
     const cardMap = new Map(cards.map(c => [c.id, c]));
@@ -71,7 +73,8 @@ export const cardStateDao = {
 
   async getNextLearnDue(folderIds: string[], now: Date): Promise<Date | null> {
     if (folderIds.length === 0) return null;
-    const cards = await db.cards.where('folderId').anyOf(folderIds).toArray();
+    const cards = (await db.cards.where('folderId').anyOf(folderIds).toArray())
+      .filter(c => !c.isDeleted);
     if (cards.length === 0) return null;
     const cardIds = cards.map(c => c.id);
     const states = await db.cardStates.where('cardId').anyOf(cardIds).toArray();
@@ -91,9 +94,10 @@ export const cardStateDao = {
     if (folderIds.length === 0) return { new: 0, learning: 0, review: 0 };
 
     const learnAhead = new Date(now.getTime() + AppConstants.learnAheadMinutes * 60000).toISOString();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const today = jstMidnight(now).toISOString(); // 日本時間での当日0:00
 
-    const cards = await db.cards.where('folderId').anyOf(folderIds).toArray();
+    const cards = (await db.cards.where('folderId').anyOf(folderIds).toArray())
+      .filter(c => !c.isDeleted);
     const cardIds = cards.map(c => c.id);
     if (cardIds.length === 0) return { new: 0, learning: 0, review: 0 };
 

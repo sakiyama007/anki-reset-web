@@ -57,19 +57,20 @@ async function mergeAndPersist(remote: SyncPayload): Promise<void> {
   // Union merge: all records from both sides are kept.
   // For the same ID, the record with the newer updatedAt wins.
   // Records are never deleted — data is only added or updated.
+  // ?? [] は旧バージョンのペイロードに該当フィールドがない場合の防御。
   const mergedFolders = mergeRecords(
     local.data.folders,
-    remote.data.folders,
+    remote.data.folders ?? [],
     (f: Folder) => f.id,
   );
   const mergedCards = mergeRecords(
     local.data.cards,
-    remote.data.cards,
+    remote.data.cards ?? [],
     (c: FlashCard) => c.id,
   );
   const mergedStates = mergeRecords(
     local.data.cardStates,
-    remote.data.cardStates,
+    remote.data.cardStates ?? [],  // 学習状況も必ず同期する
     (s: CardState) => s.cardId,
   );
 

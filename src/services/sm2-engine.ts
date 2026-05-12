@@ -1,15 +1,18 @@
 import { CardState, CardStudyState, Rating } from '@/lib/types';
 import { AppConstants } from '@/lib/constants';
+import { jstMidnight } from '@/lib/utils';
 
 function clampInterval(interval: number): number {
   return Math.min(Math.max(interval, 1), AppConstants.maximumInterval);
 }
 
-/** Returns midnight of now + intervalDays (review due dates are day-level). */
+/**
+ * 日本時間 (JST) での now の翌 intervalDays 日後 0:00 を返す。
+ * JST は通年 UTC+9 固定なので、24h × intervalDays で正確に進められる。
+ */
 function dayDue(now: Date, intervalDays: number): Date {
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  d.setDate(d.getDate() + intervalDays);
-  return d;
+  const midnight = jstMidnight(now);
+  return new Date(midnight.getTime() + intervalDays * 24 * 60 * 60 * 1000);
 }
 
 function copyState(current: CardState, overrides: Partial<CardState>): CardState {
@@ -31,9 +34,9 @@ function processLearning(current: CardState, rating: Rating, now: Date): CardSta
       const currentIdx = Math.min(Math.max(current.stepIndex, 0), steps.length - 1);
       let delayMinutes: number;
       if (currentIdx === 0 && steps.length > 1) {
-        delayMinutes = Math.round((steps[0] + steps[1]) / 2);
+        delayMinutes = (steps[0] + steps[1]) / 2;
       } else if (steps.length === 1) {
-        delayMinutes = Math.min(Math.round(steps[0] * 1.5), steps[0] + 1440);
+        delayMinutes = Math.min(steps[0] * 1.5, steps[0] + 1440);
       } else {
         delayMinutes = steps[currentIdx];
       }

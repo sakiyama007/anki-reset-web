@@ -25,6 +25,7 @@ export default function HomePage() {
   const [createDialog, setCreateDialog] = useState<{ parentId: string | null } | null>(null);
   const [renameDialog, setRenameDialog] = useState<FolderInfo | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<FolderInfo | null>(null);
+  const [deleteBatchConfirm, setDeleteBatchConfirm] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [error, setError] = useState('');
 
@@ -73,6 +74,7 @@ export default function HomePage() {
       await deleteFolder(id);
     }
     clearSelection();
+    setDeleteBatchConfirm(false);
   };
 
   const handleCreate = async () => {
@@ -120,7 +122,7 @@ export default function HomePage() {
                 <Button size="sm" onClick={handleStudySelected}>
                   <BookOpen size={16} className="mr-1" /> 学習
                 </Button>
-                <Button size="sm" variant="destructive" onClick={handleDeleteSelected}>
+                <Button size="sm" variant="destructive" onClick={() => setDeleteBatchConfirm(true)}>
                   <Trash2 size={16} />
                 </Button>
               </div>
@@ -236,6 +238,19 @@ export default function HomePage() {
         <DialogActions>
           <Button variant="ghost" onClick={() => setRenameDialog(null)}>キャンセル</Button>
           <Button onClick={handleRename}>変更</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Batch delete confirm dialog */}
+      <Dialog open={deleteBatchConfirm} onClose={() => setDeleteBatchConfirm(false)}>
+        <DialogTitle>フォルダ削除</DialogTitle>
+        <p className="text-sm">
+          {selectedIds.size}個のフォルダとその中のカードを全て削除しますか？
+          <br />この操作は取り消せません。
+        </p>
+        <DialogActions>
+          <Button variant="ghost" onClick={() => setDeleteBatchConfirm(false)}>キャンセル</Button>
+          <Button variant="destructive" onClick={handleDeleteSelected}>削除</Button>
         </DialogActions>
       </Dialog>
 

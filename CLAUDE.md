@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 非エンジニアの私にわかりやすく説明して、日本語で
+修正後はvercelに自動で反映してください
 
 ## Commands
 
@@ -36,7 +37,7 @@ DAOs: `folder-dao.ts`, `card-dao.ts`, `card-state-dao.ts`
 - `sm2-engine.ts` — SM-2 spaced repetition: `processRating(cardState, rating, now)` → updated CardState. States: `newCard → learning → review`, with `relearning` on lapse
 - `study-session.ts` — study queue fetching and card answering. Priority: relearning > learning > review > new
 - `csv-service.ts` — import/export with hierarchical folder paths
-- `sync-service.ts` — Google Drive sync (last-write-wins, appDataFolder)
+- `sync-service.ts` — Google Drive sync (last-write-wins by `updatedAt`, appDataFolder). `folders`・`cards`・`cardStates` すべてをマージ。`remote.data.X ?? []` で旧ペイロードに対して防御済み
 - `google-auth.ts` / `google-drive.ts` — OAuth 2.0 + Drive API wrappers
 
 ### State (`src/stores/`)
@@ -59,11 +60,9 @@ DAOs: `folder-dao.ts`, `card-dao.ts`, `card-state-dao.ts`
 - `folder/folder-node.tsx` — recursive folder tree node
 
 ### Key Utilities (`src/lib/`)
-- `utils.ts` — `cn()`, `generateId()` (UUID v4), `nowISO()`, `formatDuePreview()` (Japanese time strings)
-- `constants.ts` — SM-2 config (learning steps, ease factors, intervals)
-
-### Types (`src/types/`)
-Core types: `Folder`, `FlashCard`, `CardState`, `CardStudyState` (`newCard|learning|review|relearning`), `Rating` (`again|hard|good|easy`), `FolderInfo`, `StudyCounts`
+- `utils.ts` — `cn()`, `generateId()` (UUID v4), `nowISO()`, `jstMidnight(date)` (JST 0:00 in UTC), `formatDuePreview()` (秒/分/時間/日の日本語表記)
+- `constants.ts` — SM-2 config. `learningStepsMinutes: [1, 10]` = 1分・10分。`learnAheadMinutes: 0.5`（30秒のlearn-ahead）
+- `types.ts` — `Folder`, `FlashCard`, `CardState`, `CardStudyState` (`newCard|learning|review|relearning`), `Rating` (`again|hard|good|easy`), `FolderInfo`, `StudyCounts`, `SyncPayload`
 
 ## Environment
 
@@ -73,6 +72,9 @@ NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 ```
 Google Drive sync requires the Drive API enabled with `drive.appdata` scope.
 
-## UI Language
+## Key Conventions
 
-The entire UI is in Japanese. All user-facing strings, error messages, and time formatting must use Japanese.
+- UI は全て日本語。エラーメッセージ・時間表記含む。
+- Review の due 日は **JST midnight** で保存・比較する（`jstMidnight()` / `dayDue()` を使用）。デバイスのローカルタイムゾーンに依存しないこと。
+- `formatDuePreview` は 60秒未満を秒単位で表示する（`< 1分` ではない）。
+- Sync は union merge（削除しない）。`updatedAt` の新しい方が勝つ。

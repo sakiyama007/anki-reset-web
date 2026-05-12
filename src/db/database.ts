@@ -13,6 +13,12 @@ class AnkiResetDB extends Dexie {
       cards: 'id, folderId, createdAt, updatedAt',
       cardStates: 'cardId, state, due, updatedAt',
     });
+    // v2: add isDeleted index for soft-delete support
+    this.version(2).stores({
+      folders: 'id, parentId, name, updatedAt, isDeleted',
+      cards: 'id, folderId, createdAt, updatedAt, isDeleted',
+      cardStates: 'cardId, state, due, updatedAt',
+    });
   }
 }
 

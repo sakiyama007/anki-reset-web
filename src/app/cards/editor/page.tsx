@@ -7,6 +7,7 @@ import { cardDao } from '@/db/card-dao';
 import { useFolderStore } from '@/stores/folder-store';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogTitle, DialogActions } from '@/components/ui/dialog';
 
 export default function CardEditorPageWrapper() {
   return <Suspense><CardEditorPage /></Suspense>;
@@ -22,6 +23,7 @@ function CardEditorPage() {
   const [front, setFront] = useState('');
   const [back, setBack] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const refresh = useFolderStore((s) => s.refresh);
   const frontRef = useRef<HTMLTextAreaElement>(null);
 
@@ -64,9 +66,9 @@ function CardEditorPage() {
 
   const handleDelete = async () => {
     if (!cardId) return;
-    if (!confirm('このカードを削除しますか？')) return;
     await cardDao.delete(cardId);
     refresh();
+    setDeleteConfirm(false);
     router.back();
   };
 
@@ -76,7 +78,7 @@ function CardEditorPage() {
         <button onClick={() => router.back()} className="p-1"><ArrowLeft size={20} /></button>
         <h1 className="flex-1 font-semibold">{isEdit ? 'カード編集' : 'カード作成'}</h1>
         {isEdit && (
-          <Button size="icon" variant="ghost" onClick={handleDelete}>
+          <Button size="icon" variant="ghost" onClick={() => setDeleteConfirm(true)}>
             <Trash2 size={18} className="text-red-500" />
           </Button>
         )}
@@ -109,6 +111,19 @@ function CardEditorPage() {
           {saving ? '保存中...' : isEdit ? '更新' : '保存して次へ'}
         </Button>
       </div>
+
+      {/* Delete confirm dialog */}
+      <Dialog open={deleteConfirm} onClose={() => setDeleteConfirm(false)}>
+        <DialogTitle>カード削除</DialogTitle>
+        <p className="text-sm">
+          このカードを削除しますか？
+          <br />この操作は取り消せません。
+        </p>
+        <DialogActions>
+          <Button variant="ghost" onClick={() => setDeleteConfirm(false)}>キャンセル</Button>
+          <Button variant="destructive" onClick={handleDelete}>削除</Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 }
