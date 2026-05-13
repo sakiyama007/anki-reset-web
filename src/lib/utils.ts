@@ -43,16 +43,22 @@ export function getSchedulerPreferences(): SchedulerPreferences {
       };
     }
 
-    const parsed = JSON.parse(raw) as { state?: Partial<SchedulerPreferences> };
+    const parsed = JSON.parse(raw) as { state?: Partial<SchedulerPreferences>; version?: number };
     const nextDayStartsHour = parsed.state?.nextDayStartsHour;
     const learnAheadMinutes = parsed.state?.learnAheadMinutes;
+    const isLegacyLearnAheadDefault =
+      (parsed.version === undefined || parsed.version < 1)
+      && learnAheadMinutes === 0.5;
 
     return {
       nextDayStartsHour: typeof nextDayStartsHour === 'number'
         ? Math.min(23, Math.max(0, Math.round(nextDayStartsHour)))
         : AppConstants.defaultNextDayStartsHour,
       learnAheadMinutes: typeof learnAheadMinutes === 'number'
-        ? Math.max(0, learnAheadMinutes)
+        ? Math.max(
+          0,
+          isLegacyLearnAheadDefault ? AppConstants.defaultLearnAheadMinutes : learnAheadMinutes,
+        )
         : AppConstants.defaultLearnAheadMinutes,
     };
   } catch {

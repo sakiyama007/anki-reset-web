@@ -39,8 +39,7 @@ function processLearning(
       const currentIdx = Math.min(Math.max(current.stepIndex, 0), steps.length - 1);
       let delayMinutes: number;
       if (currentIdx === 0 && steps.length > 1) {
-        // UX: avoid re-showing the same card too quickly after Hard at the first step.
-        delayMinutes = steps[1];
+        delayMinutes = Math.round((steps[0] + steps[1]) / 2);
       } else if (steps.length === 1) {
         delayMinutes = Math.min(steps[0] * 1.5, steps[0] + 1440);
       } else {

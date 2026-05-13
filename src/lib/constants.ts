@@ -2,7 +2,7 @@ export const AppConstants = {
   maxFolderDepth: 5,
   pageSize: 50,
   defaultNextDayStartsHour: 4,
-  defaultLearnAheadMinutes: 0.5,
+  defaultLearnAheadMinutes: 20,
 
   // SM-2 parameters (Anki defaults)
   learningStepsMinutes: [1, 10] as readonly number[], // 1分, 10分
@@ -25,7 +25,7 @@ export const AppConstants = {
   minEaseFactor: 1.3,
 
   // Learn-ahead buffer
-  learnAheadMinutes: 0.5,
+  learnAheadMinutes: 20,
 
   // Daily defaults
   defaultNewCardsPerDay: 20,
