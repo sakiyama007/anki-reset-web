@@ -75,6 +75,21 @@ Append one entry per execution/session.
 - `npm.cmd run build`
 - `npm.cmd run lint`
 
+## 2026-05-18 JST - Show card review history
+
+### User Request
+- Show learning history from the card list detail view, including exact hour/minute/second and what happened.
+
+### Changes
+- Added card-specific revlog lookup.
+- Changed card list clicks to open a detail dialog instead of going straight to edit.
+- Added review history with reviewed timestamp, rating, state transition, interval transition, and next due time.
+- Kept editing available from the detail dialog.
+
+### Verification
+- `npm.cmd run build`
+- `npm.cmd run lint`
+
 ## 2026-05-17 JST - Interday learning review usage fix
 
 ### User Request

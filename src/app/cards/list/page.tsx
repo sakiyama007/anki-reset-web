@@ -2,16 +2,48 @@
 
 import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Plus, Search, Trash2, X, Check } from 'lucide-react';
+import { ArrowLeft, Check, Edit, Plus, Search, Trash2, X } from 'lucide-react';
 import { cardDao } from '@/db/card-dao';
+import { revlogDao } from '@/db/revlog-dao';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogTitle, DialogActions } from '@/components/ui/dialog';
-import type { FlashCard } from '@/lib/types';
+import type { FlashCard, Rating, Revlog } from '@/lib/types';
 import { AppConstants } from '@/lib/constants';
+
+const ratingLabels: Record<Rating, string> = {
+  again: 'Again',
+  hard: 'Hard',
+  good: 'Good',
+  easy: 'Easy',
+};
+
+const stateLabels: Record<string, string> = {
+  newCard: '新規',
+  learning: '学習中',
+  review: '復習',
+  relearning: '再学習',
+};
 
 export default function CardListPageWrapper() {
   return <Suspense><CardListPage /></Suspense>;
+}
+
+function formatReviewedAt(value: string): string {
+  return new Intl.DateTimeFormat('ja-JP', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function formatInterval(days: number): string {
+  if (days <= 0) return '当日';
+  return `${days}日`;
 }
 
 function CardListPage() {
@@ -27,6 +59,9 @@ function CardListPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelecting, setIsSelecting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [detailCard, setDetailCard] = useState<FlashCard | null>(null);
+  const [detailLogs, setDetailLogs] = useState<Revlog[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
   const offsetRef = useRef(0);
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -45,7 +80,7 @@ function CardListPage() {
     if (reset) {
       setCards(results);
     } else {
-      setCards((prev) => [...prev, ...results]);
+      setCards((previous) => [...previous, ...results]);
     }
     setHasMore(results.length >= AppConstants.pageSize);
     offsetRef.current += results.length;
@@ -64,12 +99,30 @@ function CardListPage() {
   };
 
   const toggleSelect = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  };
+
+  const openDetail = async (card: FlashCard) => {
+    setDetailCard(card);
+    setDetailLogs([]);
+    setDetailLoading(true);
+    try {
+      const logs = await revlogDao.getByCardId(card.id);
+      setDetailLogs(logs);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeDetail = () => {
+    setDetailCard(null);
+    setDetailLogs([]);
+    setDetailLoading(false);
   };
 
   const handleDeleteSelected = async () => {
@@ -81,47 +134,61 @@ function CardListPage() {
   };
 
   const selectAll = () => {
-    setSelectedIds(new Set(cards.map(c => c.id)));
+    setSelectedIds(new Set(cards.map((card) => card.id)));
+  };
+
+  const goToEditor = (cardId?: string) => {
+    const suffix = cardId ? `&cardId=${cardId}` : '';
+    router.push(`/cards/editor?folderId=${folderId}${suffix}`);
   };
 
   return (
-    <div className="flex flex-col h-[100dvh]" onClick={(e) => e.stopPropagation()}>
-      {/* Header */}
-      <header className="px-4 py-3 border-b border-border bg-background sticky top-0 z-10">
+    <div className="flex h-[100dvh] flex-col" onClick={(event) => event.stopPropagation()}>
+      <header className="sticky top-0 z-10 border-b border-border bg-background px-4 py-3">
         <div className="flex items-center gap-2">
-          <button onClick={() => router.back()} className="p-1"><ArrowLeft size={20} /></button>
+          <button onClick={() => router.back()} className="p-1">
+            <ArrowLeft size={20} />
+          </button>
           {isSelecting ? (
             <>
               <span className="flex-1 font-semibold">{selectedIds.size}件選択</span>
-              <Button size="sm" variant="ghost" onClick={selectAll}><Check size={16} className="mr-1" /> 全選択</Button>
-              <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(true)}><Trash2 size={16} /></Button>
-              <Button size="sm" variant="ghost" onClick={() => {
-                setIsSelecting(false);
-                setSelectedIds(new Set());
-              }}><X size={16} /></Button>
+              <Button size="sm" variant="ghost" onClick={selectAll}>
+                <Check size={16} className="mr-1" /> 全選択
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(true)}>
+                <Trash2 size={16} />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setIsSelecting(false);
+                  setSelectedIds(new Set());
+                }}
+              >
+                <X size={16} />
+              </Button>
             </>
           ) : (
             <>
-              <h1 className="flex-1 font-semibold truncate">{decodeURIComponent(folderName)}</h1>
-              <Button size="icon" variant="ghost" onClick={() => router.push(`/cards/editor?folderId=${folderId}`)}>
+              <h1 className="flex-1 truncate font-semibold">{decodeURIComponent(folderName)}</h1>
+              <Button size="icon" variant="ghost" onClick={() => goToEditor()}>
                 <Plus size={22} />
               </Button>
             </>
           )}
         </div>
 
-        {/* Search */}
-        <div className="mt-2 relative">
+        <div className="relative mt-2">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="検索..."
             className="pl-9"
-            onChange={(e) => handleSearch(e.target.value)}
+            onChange={(event) => handleSearch(event.target.value)}
           />
         </div>
       </header>
 
-      {/* Card list */}
       <div className="flex-1 overflow-auto">
         {cards.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
@@ -132,16 +199,16 @@ function CardListPage() {
             {cards.map((card) => (
               <div
                 key={card.id}
-                className="flex items-center px-4 py-3 border-b border-border/50 hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer"
+                className="flex cursor-pointer items-center border-b border-border/50 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-900"
                 onClick={() => {
                   if (isSelecting) {
                     toggleSelect(card.id);
                   } else {
-                    router.push(`/cards/editor?folderId=${folderId}&cardId=${card.id}`);
+                    openDetail(card);
                   }
                 }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
+                onContextMenu={(event) => {
+                  event.preventDefault();
                   setIsSelecting(true);
                   toggleSelect(card.id);
                 }}
@@ -151,13 +218,13 @@ function CardListPage() {
                     type="checkbox"
                     checked={selectedIds.has(card.id)}
                     onChange={() => toggleSelect(card.id)}
-                    className="w-5 h-5 mr-3 accent-primary"
-                    onClick={(e) => e.stopPropagation()}
+                    className="mr-3 h-5 w-5 accent-primary"
+                    onClick={(event) => event.stopPropagation()}
                   />
                 )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{card.front}</p>
-                  <p className="text-xs text-muted-foreground truncate mt-0.5">{card.back}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{card.front}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">{card.back}</p>
                 </div>
               </div>
             ))}
@@ -171,14 +238,78 @@ function CardListPage() {
             )}
             {loading && (
               <div className="flex justify-center py-4">
-                <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" />
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Delete confirm dialog */}
+      <Dialog open={detailCard !== null} onClose={closeDetail} className="max-w-2xl">
+        {detailCard && (
+          <>
+            <DialogTitle>カード詳細</DialogTitle>
+            <div className="space-y-4">
+              <section className="space-y-2 rounded-lg border border-border p-3">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">表</p>
+                  <p className="whitespace-pre-wrap text-sm">{detailCard.front}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">裏</p>
+                  <p className="whitespace-pre-wrap text-sm">{detailCard.back}</p>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">学習履歴</h3>
+                {detailLoading ? (
+                  <div className="flex justify-center py-6">
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  </div>
+                ) : detailLogs.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+                    まだ学習履歴がありません
+                  </p>
+                ) : (
+                  <div className="max-h-[45vh] overflow-auto rounded-lg border border-border">
+                    {detailLogs.map((log) => (
+                      <div key={log.id} className="border-b border-border px-3 py-2 last:border-b-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="text-sm font-medium">{formatReviewedAt(log.reviewedAt)}</span>
+                          <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                            {ratingLabels[log.rating]}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {stateLabels[log.previousState] ?? log.previousState}
+                          {' -> '}
+                          {stateLabels[log.newState] ?? log.newState}
+                          {' / interval '}
+                          {formatInterval(log.previousInterval)}
+                          {' -> '}
+                          {formatInterval(log.newInterval)}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          次回: {formatReviewedAt(log.newDue)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+            <DialogActions>
+              <Button variant="ghost" onClick={closeDetail}>閉じる</Button>
+              <Button onClick={() => goToEditor(detailCard.id)}>
+                <Edit size={16} className="mr-1" />
+                編集
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+
       <Dialog open={deleteConfirm} onClose={() => setDeleteConfirm(false)}>
         <DialogTitle>カード削除</DialogTitle>
         <p className="text-sm">
