@@ -61,6 +61,20 @@ Append one entry per execution/session.
 - `npm.cmd run build`
 - `npm.cmd run lint`
 
+## 2026-05-18 JST - Improve web select-all controls
+
+### User Request
+- Make all-select available in the web app.
+
+### Changes
+- Reworked the web study selection header so "全選択" is always available.
+- Added a separate "選択解除" control when folders are selected.
+- Cleaned the study selection page text to readable Japanese.
+
+### Verification
+- `npm.cmd run build`
+- `npm.cmd run lint`
+
 ## 2026-05-17 JST - Interday learning review usage fix
 
 ### User Request

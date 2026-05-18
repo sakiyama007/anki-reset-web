@@ -15,7 +15,7 @@ export default function StudySelectPage() {
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const revision = useFolderStore((s) => s.revision);
+  const revision = useFolderStore((state) => state.revision);
 
   const loadFolders = useCallback(async () => {
     setLoading(true);
@@ -30,12 +30,12 @@ export default function StudySelectPage() {
 
   const toggleSelect = async (id: string) => {
     const allIds = await folderDao.getSelfAndDescendantIds(id);
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
       if (next.has(id)) {
-        allIds.forEach((i) => next.delete(i));
+        allIds.forEach((folderId) => next.delete(folderId));
       } else {
-        allIds.forEach((i) => next.add(i));
+        allIds.forEach((folderId) => next.add(folderId));
       }
       return next;
     });
@@ -52,49 +52,55 @@ export default function StudySelectPage() {
 
   const handleStartStudy = async () => {
     if (selectedIds.size === 0) return;
-    const allIds: string[] = [];
+
     const rootIds = await folderDao.getSelectedRootIds(Array.from(selectedIds));
+    const allIds = new Set<string>();
+
     for (const id of rootIds) {
-      allIds.push(...(await folderDao.getSelfAndDescendantIds(id)));
+      const folderIds = await folderDao.getSelfAndDescendantIds(id);
+      folderIds.forEach((folderId) => allIds.add(folderId));
     }
-    router.push(`/study/session?folders=${allIds.join(',')}&roots=${rootIds.join(',')}&name=${selectedIds.size}フォルダ`);
+
+    router.push(
+      `/study/session?folders=${Array.from(allIds).join(',')}&roots=${rootIds.join(',')}&name=${rootIds.length}フォルダ`,
+    );
   };
 
   return (
     <AppShell>
-      <div className="flex flex-col h-full">
-        <header className="px-4 py-3 border-b border-border bg-background sticky top-0 z-10">
-          <div className="flex items-start gap-3">
-            <div className="flex-1 min-w-0">
+      <div className="flex h-full flex-col">
+        <header className="sticky top-0 z-10 border-b border-border bg-background px-4 py-3">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="min-w-0 flex-1">
               <h1 className="text-lg font-bold">学習</h1>
-              <p className="text-sm text-muted-foreground mt-1">
+              <p className="mt-1 text-sm text-muted-foreground">
                 フォルダを選択して学習を開始
               </p>
             </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={selectedIds.size === 0 ? selectAllFolders : clearSelection}
-            >
-              {selectedIds.size === 0 ? (
+            <div className="flex shrink-0 gap-2">
+              <Button size="sm" variant="ghost" onClick={selectAllFolders}>
                 <CheckSquare size={16} className="mr-1" />
-              ) : (
-                <XSquare size={16} className="mr-1" />
+                全選択
+              </Button>
+              {selectedIds.size > 0 && (
+                <Button size="sm" variant="ghost" onClick={clearSelection}>
+                  <XSquare size={16} className="mr-1" />
+                  選択解除
+                </Button>
               )}
-              {selectedIds.size === 0 ? '全選択' : '選択解除'}
-            </Button>
+            </div>
           </div>
         </header>
 
         <div className="flex-1 overflow-auto">
           {loading ? (
             <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             </div>
           ) : folders.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
               <p>フォルダがありません</p>
-              <p className="text-sm mt-1">ホーム画面でフォルダを作成してください</p>
+              <p className="mt-1 text-sm">ホーム画面でフォルダを作成してください</p>
             </div>
           ) : (
             folders.map((info) => (
@@ -111,7 +117,7 @@ export default function StudySelectPage() {
         </div>
 
         {selectedIds.size > 0 && (
-          <div className="px-4 py-3 border-t border-border bg-primary/5">
+          <div className="border-t border-border bg-primary/5 px-4 py-3">
             <Button size="lg" className="w-full" onClick={handleStartStudy}>
               <BookOpen size={18} className="mr-2" />
               学習開始
