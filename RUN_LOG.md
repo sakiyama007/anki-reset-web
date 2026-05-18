@@ -39,10 +39,10 @@ Append one entry per execution/session.
 - `npm.cmd audit --omit=dev`
 
 ### Current State
-- Ready to commit and push to `origin/main`.
+- Committed as `a280a41` and pushed to `origin/main`.
 
 ### Next Steps
-- Confirm Vercel deployment status after GitHub receives the push.
+- Confirm Vercel deployment status in the Vercel dashboard if needed.
 
 ## 2026-05-17 JST - Interday learning review usage fix
 
