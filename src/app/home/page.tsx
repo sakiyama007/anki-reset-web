@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { FolderPlus, BookOpen, Trash2, X } from 'lucide-react';
+import { FolderPlus, BookOpen, CheckSquare, Trash2, X } from 'lucide-react';
 import { folderDao } from '@/db/folder-dao';
 import { deckOptionsDao } from '@/db/deck-options-dao';
 import { useFolderStore } from '@/stores/folder-store';
@@ -80,24 +80,30 @@ export default function HomePage() {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
-        allIds.forEach((i) => next.delete(i));
+        allIds.forEach((folderId) => next.delete(folderId));
       } else {
-        allIds.forEach((i) => next.add(i));
+        allIds.forEach((folderId) => next.add(folderId));
       }
       return next;
     });
+  };
+
+  const selectAllFolders = async () => {
+    const allFolders = await folderDao.getAll();
+    setSelectedIds(new Set(allFolders.map((folder) => folder.id)));
   };
 
   const clearSelection = () => setSelectedIds(new Set());
 
   const handleStudySelected = async () => {
     if (selectedIds.size === 0) return;
-    const allIds: string[] = [];
-    const rootIds = Array.from(selectedIds);
+    const rootIds = await folderDao.getSelectedRootIds(Array.from(selectedIds));
+    const allIds = new Set<string>();
     for (const id of rootIds) {
-      allIds.push(...(await folderDao.getSelfAndDescendantIds(id)));
+      const folderIds = await folderDao.getSelfAndDescendantIds(id);
+      folderIds.forEach((folderId) => allIds.add(folderId));
     }
-    router.push(`/study/session?folders=${allIds.join(',')}&roots=${rootIds.join(',')}&name=${selectedIds.size}フォルダ`);
+    router.push(`/study/session?folders=${Array.from(allIds).join(',')}&roots=${rootIds.join(',')}&name=${rootIds.length}フォルダ`);
   };
 
   const handleDeleteSelected = async () => {
@@ -208,7 +214,7 @@ export default function HomePage() {
     <AppShell>
       <div className="flex flex-col h-full">
         {/* Header */}
-        <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-background sticky top-0 z-10">
+        <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border bg-background sticky top-0 z-10">
           {isSelecting ? (
             <>
               <div className="flex items-center gap-2">
@@ -216,6 +222,9 @@ export default function HomePage() {
                 <span className="font-semibold">{selectedIds.size}件選択中</span>
               </div>
               <div className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={selectAllFolders}>
+                  <CheckSquare size={16} className="mr-1" /> 全選択
+                </Button>
                 <Button size="sm" onClick={handleStudySelected}>
                   <BookOpen size={16} className="mr-1" /> 学習
                 </Button>
@@ -227,13 +236,18 @@ export default function HomePage() {
           ) : (
             <>
               <h1 className="text-lg font-bold">ホーム</h1>
-              <Button size="icon" variant="ghost" onClick={() => {
-                setFolderName('');
-                setError('');
-                setCreateDialog({ parentId: null });
-              }}>
-                <FolderPlus size={22} />
-              </Button>
+              <div className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={selectAllFolders}>
+                  <CheckSquare size={16} className="mr-1" /> 全選択
+                </Button>
+                <Button size="icon" variant="ghost" onClick={() => {
+                  setFolderName('');
+                  setError('');
+                  setCreateDialog({ parentId: null });
+                }}>
+                  <FolderPlus size={22} />
+                </Button>
+              </div>
             </>
           )}
         </header>

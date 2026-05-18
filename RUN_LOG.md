@@ -90,6 +90,21 @@ Append one entry per execution/session.
 - `npm.cmd run build`
 - `npm.cmd run lint`
 
+## 2026-05-18 JST - Merge study tab into home
+
+### User Request
+- Merge the study tab into the home tab and make the study-tab features available from home.
+
+### Changes
+- Removed the study tab from the shared app navigation.
+- Added home-level all-select for folders.
+- Updated home study start to normalize selected folders to root folders and avoid duplicated parent/child folder parameters.
+- Replaced `/study` with a redirect to `/home` while keeping `/study/session` for active sessions.
+
+### Verification
+- `npm.cmd run build`
+- `npm.cmd run lint`
+
 ## 2026-05-17 JST - Interday learning review usage fix
 
 ### User Request
