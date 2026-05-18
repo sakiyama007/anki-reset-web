@@ -10,6 +10,8 @@ export interface Folder {
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
   isDeleted?: boolean;
+  deletedAt?: string; // ISO 8601
+  deleteBaseUpdatedAt?: string; // ISO 8601
 }
 
 export interface FlashCard {
@@ -20,6 +22,8 @@ export interface FlashCard {
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
   isDeleted?: boolean;
+  deletedAt?: string; // ISO 8601
+  deleteBaseUpdatedAt?: string; // ISO 8601
   isSuspended?: boolean;
   isLeech?: boolean;
 }
@@ -33,8 +37,25 @@ export interface CardState {
   easeFactor: number;
   repetition: number;
   lapseCount: number;
+  lastReviewedAt?: string; // ISO 8601
   updatedAt: string; // ISO 8601
 }
+
+export type DeckOptionsSnapshot = Pick<
+  DeckOptions,
+  | 'learningStepsMinutes'
+  | 'graduatingInterval'
+  | 'easyGraduationInterval'
+  | 'initialEaseFactor'
+  | 'hardMultiplier'
+  | 'easyBonus'
+  | 'intervalModifier'
+  | 'maximumInterval'
+  | 'relearningStepsMinutes'
+  | 'lapseNewInterval'
+  | 'minimumLapseInterval'
+  | 'minEaseFactor'
+>;
 
 export interface DeckOptions {
   folderId: string;
@@ -77,6 +98,10 @@ export interface Revlog {
   reviewedAt: string;
   updatedAt: string;
   deviceId?: string;
+  schedulerSnapshot?: Pick<SchedulerPreferences, 'nextDayStartsHour'>;
+  deckOptionsSnapshot?: DeckOptionsSnapshot;
+  previousCardStateSnapshot?: CardState;
+  newCardStateSnapshot?: CardState;
 }
 
 export interface StudyCard {

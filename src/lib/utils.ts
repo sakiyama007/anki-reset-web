@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { AppConstants } from './constants';
@@ -9,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function generateId(): string {
-  return uuidv4();
+  return crypto.randomUUID();
 }
 
 export function nowISO(): string {

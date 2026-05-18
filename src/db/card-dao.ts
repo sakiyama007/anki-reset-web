@@ -2,6 +2,7 @@ import { db } from './database';
 import type { FlashCard, CardState } from '@/lib/types';
 import { generateId, nowISO } from '@/lib/utils';
 import { AppConstants } from '@/lib/constants';
+import { createInitialCardState } from '@/services/sm2-engine';
 
 export const cardDao = {
   async insert(front: string, back: string, folderId: string): Promise<FlashCard> {
@@ -16,17 +17,7 @@ export const cardDao = {
       isSuspended: false,
       isLeech: false,
     };
-    const state: CardState = {
-      cardId: card.id,
-      state: 'newCard',
-      stepIndex: 0,
-      due: now,
-      interval: 0,
-      easeFactor: AppConstants.initialEaseFactor,
-      repetition: 0,
-      lapseCount: 0,
-      updatedAt: now,
-    };
+    const state: CardState = createInitialCardState(card.id, now);
 
     await db.transaction('rw', [db.cards, db.cardStates], async () => {
       await db.cards.add(card);
@@ -53,17 +44,7 @@ export const cardDao = {
         isSuspended: false,
         isLeech: false,
       });
-      states.push({
-        cardId: id,
-        state: 'newCard',
-        stepIndex: 0,
-        due: now,
-        interval: 0,
-        easeFactor: AppConstants.initialEaseFactor,
-        repetition: 0,
-        lapseCount: 0,
-        updatedAt: now,
-      });
+      states.push(createInitialCardState(id, now));
     }
 
     await db.transaction('rw', [db.cards, db.cardStates], async () => {
@@ -77,14 +58,37 @@ export const cardDao = {
   },
 
   async delete(id: string): Promise<void> {
+    const card = await db.cards.get(id);
+    if (!card || card.isDeleted) return;
+
     const now = nowISO();
-    await db.cards.update(id, { isDeleted: true, updatedAt: now });
+    await db.cards.put({
+      ...card,
+      isDeleted: true,
+      deletedAt: now,
+      deleteBaseUpdatedAt: card.updatedAt,
+      updatedAt: now,
+    });
   },
 
   async deleteBatch(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
+
+    const cards = await db.cards.where('id').anyOf(ids).toArray();
+    if (cards.length === 0) return;
+
     const now = nowISO();
-    await db.cards.where('id').anyOf(ids).modify({ isDeleted: true, updatedAt: now });
+    await db.cards.bulkPut(
+      cards
+        .filter((card) => !card.isDeleted)
+        .map((card) => ({
+          ...card,
+          isDeleted: true,
+          deletedAt: now,
+          deleteBaseUpdatedAt: card.updatedAt,
+          updatedAt: now,
+        })),
+    );
   },
 
   async moveToFolder(cardIds: string[], folderId: string): Promise<void> {
@@ -139,5 +143,17 @@ export const cardDao = {
 
   async getTotalCount(): Promise<number> {
     return db.cards.filter(c => !c.isDeleted).count();
+  },
+
+  async reactivate(id: string): Promise<void> {
+    const card = await db.cards.get(id);
+    if (!card) return;
+
+    await db.cards.put({
+      ...card,
+      isSuspended: false,
+      isLeech: false,
+      updatedAt: nowISO(),
+    });
   },
 };

@@ -24,12 +24,26 @@ interface StudyState {
 }
 
 let waitTimer: ReturnType<typeof setTimeout> | null = null;
+const SHORT_WAIT_THRESHOLD_MS = 60 * 1000;
+const MIN_LEARN_AHEAD_DELAY_MS = 1000;
 
 function clearWaitTimer() {
   if (waitTimer !== null) {
     clearTimeout(waitTimer);
     waitTimer = null;
   }
+}
+
+function getLearnWaitDelayMs(nextDue: Date, now: Date): number {
+  const schedulerPreferences = getSchedulerPreferences();
+  const learnAheadMs = schedulerPreferences.learnAheadMinutes * 60000;
+  const remainingMs = Math.max(0, nextDue.getTime() - now.getTime());
+
+  if (remainingMs <= SHORT_WAIT_THRESHOLD_MS) {
+    return Math.max(MIN_LEARN_AHEAD_DELAY_MS, remainingMs - learnAheadMs);
+  }
+
+  return Math.max(MIN_LEARN_AHEAD_DELAY_MS, remainingMs);
 }
 
 export const useStudyStore = create<StudyState>((set, get) => ({
@@ -90,11 +104,8 @@ export const useStudyStore = create<StudyState>((set, get) => ({
       // Check if there are learning cards coming up soon
       const nextDue = await cardStateDao.getNextLearnDue(folderIds, now);
       if (nextDue) {
-        // Allow slight early resurfacing (learn-ahead), but never immediate.
-        const schedulerPreferences = getSchedulerPreferences();
-        const learnAheadMs = schedulerPreferences.learnAheadMinutes * 60000;
-        const delay = Math.max(1000, nextDue.getTime() - Date.now() - learnAheadMs);
-        const availableAt = new Date(Date.now() + delay);
+        const delay = getLearnWaitDelayMs(nextDue, now);
+        const availableAt = new Date(now.getTime() + delay);
         set({ isWaiting: true, nextDueAt: availableAt, queue: [], counts, isFlipped: false, cardKey: get().cardKey + 1 });
         waitTimer = setTimeout(async () => {
           waitTimer = null;

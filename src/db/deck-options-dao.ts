@@ -59,6 +59,23 @@ function resolveEffective(
   return normalized;
 }
 
+export function getEffectiveDeckOptionsMapFromData(
+  folders: Folder[],
+  options: DeckOptions[],
+  folderIds: string[],
+): Map<string, DeckOptions> {
+  const uniqueIds = [...new Set(folderIds)];
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
+  const optionMap = new Map(options.map((option) => [option.folderId, option]));
+  const memo = new Map<string, DeckOptions>();
+
+  for (const folderId of uniqueIds) {
+    resolveEffective(folderId, folderMap, optionMap, memo);
+  }
+
+  return memo;
+}
+
 export const deckOptionsDao = {
   normalize(folderId: string, partial?: Partial<DeckOptions>): DeckOptions {
     return normalizeDeckOptions(folderId, partial);
@@ -79,20 +96,11 @@ export const deckOptionsDao = {
   },
 
   async getEffectiveMap(folderIds: string[]): Promise<Map<string, DeckOptions>> {
-    const uniqueIds = [...new Set(folderIds)];
     const [folders, options] = await Promise.all([
       db.folders.toArray(),
       db.deckOptions.toArray(),
     ]);
-    const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
-    const optionMap = new Map(options.map((option) => [option.folderId, option]));
-    const memo = new Map<string, DeckOptions>();
-
-    for (const folderId of uniqueIds) {
-      resolveEffective(folderId, folderMap, optionMap, memo);
-    }
-
-    return memo;
+    return getEffectiveDeckOptionsMapFromData(folders, options, folderIds);
   },
 
   async upsert(options: DeckOptions): Promise<void> {

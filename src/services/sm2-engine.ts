@@ -1,8 +1,38 @@
+import { AppConstants } from '@/lib/constants';
 import type { CardState, CardStudyState, DeckOptions, Rating, SchedulerPreferences } from '@/lib/types';
 import { getSchedulerPreferences, jstDayStart } from '@/lib/utils';
 
+type SchedulingMode = 'actual' | 'preview';
+
 function clampInterval(interval: number): number {
   return Math.max(interval, 1);
+}
+
+function stableHash(input: string): number {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function deterministicUnit(...parts: string[]): number {
+  return (stableHash(parts.join('|')) % 1000000) / 1000000;
+}
+
+export function createInitialCardState(cardId: string, createdAt: string): CardState {
+  return {
+    cardId,
+    state: 'newCard',
+    stepIndex: 0,
+    due: createdAt,
+    interval: 0,
+    easeFactor: AppConstants.initialEaseFactor,
+    repetition: 0,
+    lapseCount: 0,
+    updatedAt: createdAt,
+  };
 }
 
 /**
@@ -12,6 +42,64 @@ function clampInterval(interval: number): number {
 function dayDue(now: Date, intervalDays: number, schedulerPreferences: SchedulerPreferences): Date {
   const midnight = jstDayStart(now, schedulerPreferences.nextDayStartsHour);
   return new Date(midnight.getTime() + intervalDays * 24 * 60 * 60 * 1000);
+}
+
+function getInterdayStepDays(now: Date, target: Date, schedulerPreferences: SchedulerPreferences): number {
+  const currentDayStart = jstDayStart(now, schedulerPreferences.nextDayStartsHour).getTime();
+  const targetDayStart = jstDayStart(target, schedulerPreferences.nextDayStartsHour).getTime();
+  return Math.max(1, Math.round((targetDayStart - currentDayStart) / 86400000));
+}
+
+function scheduleLearningDue(
+  current: CardState,
+  rating: Rating,
+  now: Date,
+  delayMinutes: number,
+  schedulerPreferences: SchedulerPreferences,
+  mode: SchedulingMode,
+): string {
+  const target = new Date(now.getTime() + delayMinutes * 60000);
+  const isInterday = jstDayStart(target, schedulerPreferences.nextDayStartsHour).getTime()
+    > jstDayStart(now, schedulerPreferences.nextDayStartsHour).getTime();
+
+  if (isInterday) {
+    return dayDue(now, getInterdayStepDays(now, target, schedulerPreferences), schedulerPreferences).toISOString();
+  }
+
+  const fuzzMs = mode === 'actual'
+    ? Math.round(
+      deterministicUnit(
+        current.cardId,
+        rating,
+        now.toISOString(),
+        String(current.stepIndex),
+        'learning-fuzz',
+      ) * 5 * 60 * 1000,
+    )
+    : 0;
+
+  return new Date(target.getTime() + fuzzMs).toISOString();
+}
+
+function applyReviewFuzz(
+  current: CardState,
+  rating: Rating,
+  now: Date,
+  targetInterval: number,
+  maximumInterval: number,
+  mode: SchedulingMode,
+): number {
+  const clampedTarget = Math.min(clampInterval(targetInterval), maximumInterval);
+  if (mode === 'preview' || clampedTarget < 2) {
+    return clampedTarget;
+  }
+
+  const minInterval = Math.max(2, Math.round(clampedTarget * 0.95 - 1));
+  const maxInterval = Math.max(minInterval, Math.round(clampedTarget * 1.05 + 1));
+  const unit = deterministicUnit(current.cardId, rating, now.toISOString(), 'review-fuzz');
+  const fuzzed = minInterval + Math.floor(unit * (maxInterval - minInterval + 1));
+
+  return Math.min(maximumInterval, Math.max(current.interval + 1, fuzzed));
 }
 
 function copyState(current: CardState, overrides: Partial<CardState>): CardState {
@@ -24,6 +112,7 @@ function processLearning(
   now: Date,
   deckOptions: DeckOptions,
   schedulerPreferences: SchedulerPreferences,
+  mode: SchedulingMode,
 ): CardState {
   const steps = deckOptions.learningStepsMinutes;
 
@@ -32,7 +121,7 @@ function processLearning(
       return copyState(current, {
         state: 'learning',
         stepIndex: 0,
-        due: new Date(now.getTime() + steps[0] * 60000).toISOString(),
+        due: scheduleLearningDue(current, rating, now, steps[0], schedulerPreferences, mode),
       });
 
     case 'hard': {
@@ -48,7 +137,7 @@ function processLearning(
       return copyState(current, {
         state: 'learning',
         stepIndex: currentIdx,
-        due: new Date(now.getTime() + delayMinutes * 60000).toISOString(),
+        due: scheduleLearningDue(current, rating, now, delayMinutes, schedulerPreferences, mode),
       });
     }
 
@@ -67,7 +156,7 @@ function processLearning(
       return copyState(current, {
         state: 'learning',
         stepIndex: nextStep,
-        due: new Date(now.getTime() + steps[nextStep] * 60000).toISOString(),
+        due: scheduleLearningDue(current, rating, now, steps[nextStep], schedulerPreferences, mode),
       });
     }
 
@@ -89,6 +178,7 @@ function processReview(
   now: Date,
   deckOptions: DeckOptions,
   schedulerPreferences: SchedulerPreferences,
+  mode: SchedulingMode,
 ): CardState {
   const currentInterval = Math.max(current.interval, 1);
   const dueDate = new Date(current.due);
@@ -130,7 +220,14 @@ function processReview(
 
     case 'hard': {
       const newEase = Math.max(deckOptions.minEaseFactor, ease - 0.15);
-      const clamped = Math.min(clampInterval(hardInterval), deckOptions.maximumInterval);
+      const clamped = applyReviewFuzz(
+        current,
+        rating,
+        now,
+        hardInterval,
+        deckOptions.maximumInterval,
+        mode,
+      );
       return copyState(current, {
         state: 'review',
         easeFactor: newEase,
@@ -141,7 +238,14 @@ function processReview(
     }
 
     case 'good': {
-      const clamped = Math.min(clampInterval(goodInterval), deckOptions.maximumInterval);
+      const clamped = applyReviewFuzz(
+        current,
+        rating,
+        now,
+        goodInterval,
+        deckOptions.maximumInterval,
+        mode,
+      );
       return copyState(current, {
         state: 'review',
         interval: clamped,
@@ -153,9 +257,13 @@ function processReview(
     case 'easy': {
       const newEase = ease + 0.15;
       const rawEasy = Math.round((currentInterval + daysLate) * ease * deckOptions.easyBonus * im);
-      const easyInterval = Math.min(
-        clampInterval(Math.max(goodInterval + 1, rawEasy)),
+      const easyInterval = applyReviewFuzz(
+        current,
+        rating,
+        now,
+        Math.max(goodInterval + 1, rawEasy),
         deckOptions.maximumInterval,
+        mode,
       );
       return copyState(current, {
         state: 'review',
@@ -174,6 +282,7 @@ function processRelearning(
   now: Date,
   deckOptions: DeckOptions,
   schedulerPreferences: SchedulerPreferences,
+  mode: SchedulingMode,
 ): CardState {
   const steps = deckOptions.relearningStepsMinutes;
 
@@ -182,7 +291,7 @@ function processRelearning(
       return copyState(current, {
         state: 'relearning',
         stepIndex: 0,
-        due: new Date(now.getTime() + steps[0] * 60000).toISOString(),
+        due: scheduleLearningDue(current, rating, now, steps[0], schedulerPreferences, mode),
       });
 
     case 'hard': {
@@ -190,7 +299,7 @@ function processRelearning(
       return copyState(current, {
         state: 'relearning',
         stepIndex: currentIdx,
-        due: new Date(now.getTime() + steps[currentIdx] * 60000).toISOString(),
+        due: scheduleLearningDue(current, rating, now, steps[currentIdx], schedulerPreferences, mode),
       });
     }
 
@@ -207,7 +316,7 @@ function processRelearning(
       return copyState(current, {
         state: 'relearning',
         stepIndex: nextStep,
-        due: new Date(now.getTime() + steps[nextStep] * 60000).toISOString(),
+        due: scheduleLearningDue(current, rating, now, steps[nextStep], schedulerPreferences, mode),
       });
     }
 
@@ -230,6 +339,7 @@ export function processRating(
   now: Date,
   deckOptions: DeckOptions,
   schedulerPreferences = getSchedulerPreferences(),
+  mode: SchedulingMode = 'actual',
 ): CardState {
   const updatedAt = now.toISOString();
 
@@ -237,24 +347,24 @@ export function processRating(
   switch (current.state as CardStudyState) {
     case 'newCard': {
       const asLearning = copyState(current, { state: 'learning', stepIndex: 0 });
-      result = processLearning(asLearning, rating, now, deckOptions, schedulerPreferences);
+      result = processLearning(asLearning, rating, now, deckOptions, schedulerPreferences, mode);
       break;
     }
     case 'learning':
-      result = processLearning(current, rating, now, deckOptions, schedulerPreferences);
+      result = processLearning(current, rating, now, deckOptions, schedulerPreferences, mode);
       break;
     case 'review':
-      result = processReview(current, rating, now, deckOptions, schedulerPreferences);
+      result = processReview(current, rating, now, deckOptions, schedulerPreferences, mode);
       break;
     case 'relearning':
-      result = processRelearning(current, rating, now, deckOptions, schedulerPreferences);
+      result = processRelearning(current, rating, now, deckOptions, schedulerPreferences, mode);
       break;
   }
 
-  return { ...result, updatedAt };
+  return { ...result, lastReviewedAt: updatedAt, updatedAt };
 }
 
 export function previewDue(current: CardState, rating: Rating, now: Date, deckOptions: DeckOptions): Date {
-  const newState = processRating(current, rating, now, deckOptions);
+  const newState = processRating(current, rating, now, deckOptions, getSchedulerPreferences(), 'preview');
   return new Date(newState.due);
 }

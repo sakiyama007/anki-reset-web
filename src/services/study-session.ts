@@ -2,8 +2,47 @@ import { cardStateDao } from '@/db/card-state-dao';
 import { revlogDao } from '@/db/revlog-dao';
 import { db } from '@/db/database';
 import { processRating } from './sm2-engine';
-import { generateId, getDeviceId, nowISO } from '@/lib/utils';
-import type { CardState, Rating, Revlog, StudyCard } from '@/lib/types';
+import { generateId, getDeviceId, getSchedulerPreferences } from '@/lib/utils';
+import type { CardState, DeckOptionsSnapshot, Rating, Revlog, StudyCard } from '@/lib/types';
+
+function toDeckOptionsSnapshot(card: StudyCard): DeckOptionsSnapshot {
+  const {
+    learningStepsMinutes,
+    graduatingInterval,
+    easyGraduationInterval,
+    initialEaseFactor,
+    hardMultiplier,
+    easyBonus,
+    intervalModifier,
+    maximumInterval,
+    relearningStepsMinutes,
+    lapseNewInterval,
+    minimumLapseInterval,
+    minEaseFactor,
+  } = card.deckOptions;
+
+  return {
+    learningStepsMinutes: [...learningStepsMinutes],
+    graduatingInterval,
+    easyGraduationInterval,
+    initialEaseFactor,
+    hardMultiplier,
+    easyBonus,
+    intervalModifier,
+    maximumInterval,
+    relearningStepsMinutes: [...relearningStepsMinutes],
+    lapseNewInterval,
+    minimumLapseInterval,
+    minEaseFactor,
+  };
+}
+
+export function shouldSuspendLeechCard(current: StudyCard, rating: Rating, newState: CardState): boolean {
+  return current.cardState.state === 'review'
+    && rating === 'again'
+    && current.cardState.lapseCount < current.deckOptions.leechThreshold
+    && newState.lapseCount >= current.deckOptions.leechThreshold;
+}
 
 export const studySessionService = {
   async getStudyQueue(folderIds: string[], now: Date, rootFolderIds: string[] = folderIds): Promise<StudyCard[]> {
@@ -11,8 +50,15 @@ export const studySessionService = {
   },
 
   async answerCard(current: StudyCard, rating: Rating, now: Date): Promise<CardState> {
-    const newState = processRating(current.cardState, rating, now, current.deckOptions);
-    const reviewedAt = nowISO();
+    const schedulerPreferences = getSchedulerPreferences();
+    const newState = processRating(
+      current.cardState,
+      rating,
+      now,
+      current.deckOptions,
+      schedulerPreferences,
+    );
+    const reviewedAt = now.toISOString();
     const deviceId = getDeviceId();
 
     const revlog: Revlog = {
@@ -29,13 +75,15 @@ export const studySessionService = {
       reviewedAt,
       updatedAt: reviewedAt,
       deviceId,
+      schedulerSnapshot: {
+        nextDayStartsHour: schedulerPreferences.nextDayStartsHour,
+      },
+      deckOptionsSnapshot: toDeckOptionsSnapshot(current),
+      previousCardStateSnapshot: { ...current.cardState },
+      newCardStateSnapshot: { ...newState },
     };
 
-    const shouldSuspendLeech =
-      current.cardState.state === 'review' &&
-      rating === 'again' &&
-      current.cardState.lapseCount < current.deckOptions.leechThreshold &&
-      newState.lapseCount >= current.deckOptions.leechThreshold;
+    const shouldSuspendLeech = shouldSuspendLeechCard(current, rating, newState);
 
     await db.transaction('rw', [db.cards, db.cardStates, db.revlogs], async () => {
       await cardStateDao.update(newState);

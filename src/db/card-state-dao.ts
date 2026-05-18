@@ -1,10 +1,11 @@
 import { db } from './database';
 import { deckOptionsDao } from './deck-options-dao';
 import { revlogDao } from './revlog-dao';
-import type { DeckOptions, Folder, Revlog, StudyCard, StudyCounts } from '@/lib/types';
+import type { CardState, DeckOptions, FlashCard, Folder, Revlog, StudyCard, StudyCounts } from '@/lib/types';
 import { getSchedulerPreferences, jstDayStart } from '@/lib/utils';
 
 type DueCandidate = StudyCard & {
+  isInterdayLearning: boolean;
   priority: number;
   sortSeed: number;
   limitDeckIds: string[];
@@ -19,8 +20,12 @@ function stableHash(input: string): number {
   return Math.abs(hash);
 }
 
-function compareNewCards(a: DueCandidate, b: DueCandidate): number {
-  if (a.deckOptions.newCardInsertionOrder === 'random') {
+function compareNewCards(
+  a: DueCandidate,
+  b: DueCandidate,
+  newCardInsertionOrder: DeckOptions['newCardInsertionOrder'],
+): number {
+  if (newCardInsertionOrder === 'random') {
     return a.sortSeed - b.sortSeed;
   }
   const created = a.card.createdAt.localeCompare(b.card.createdAt);
@@ -28,11 +33,15 @@ function compareNewCards(a: DueCandidate, b: DueCandidate): number {
   return a.card.id.localeCompare(b.card.id);
 }
 
-function compareReviewCards(a: DueCandidate, b: DueCandidate): number {
+function compareReviewCards(
+  a: DueCandidate,
+  b: DueCandidate,
+  reviewSortOrder: DeckOptions['reviewSortOrder'],
+): number {
   const due = a.cardState.due.localeCompare(b.cardState.due);
   if (due !== 0) return due;
 
-  if (a.deckOptions.reviewSortOrder === 'dueAscRandom') {
+  if (reviewSortOrder === 'dueAscRandom') {
     return a.sortSeed - b.sortSeed;
   }
 
@@ -105,7 +114,7 @@ function buildDailyUsage(
       continue;
     }
 
-    if (log.previousState === 'review') {
+    if (log.previousState === 'review' || isInterdayLearningReviewLog(log)) {
       for (const deckId of limitDeckIds) {
         increment(reviewByDeck, deckId);
       }
@@ -113,6 +122,15 @@ function buildDailyUsage(
   }
 
   return { newByDeck, reviewByDeck };
+}
+
+function isInterdayLearningReviewLog(log: Revlog): boolean {
+  if (log.previousState !== 'learning' && log.previousState !== 'relearning') {
+    return false;
+  }
+
+  const nextDayStartsHour = log.schedulerSnapshot?.nextDayStartsHour ?? getSchedulerPreferences().nextDayStartsHour;
+  return log.previousDue === jstDayStart(new Date(log.previousDue), nextDayStartsHour).toISOString();
 }
 
 function isLimitReached(
@@ -135,6 +153,162 @@ function consumeLimit(map: Map<string, number>, limitDeckIds: string[]): void {
   }
 }
 
+function isInterdayLearningState(state: StudyCard['cardState'], schedulerPreferences: ReturnType<typeof getSchedulerPreferences>): boolean {
+  if (state.state !== 'learning' && state.state !== 'relearning') {
+    return false;
+  }
+
+  return state.due === jstDayStart(new Date(state.due), schedulerPreferences.nextDayStartsHour).toISOString();
+}
+
+type DueSnapshotInput = {
+  folderIds: string[];
+  rootFolderIds?: string[];
+  now: Date;
+  cards: FlashCard[];
+  states: CardState[];
+  folders: Folder[];
+  logs: Revlog[];
+  deckOptionsByFolder: Map<string, DeckOptions>;
+};
+
+export function buildDueSnapshotFromData({
+  folderIds,
+  rootFolderIds = folderIds,
+  now,
+  cards,
+  states,
+  folders,
+  logs,
+  deckOptionsByFolder,
+}: DueSnapshotInput): {
+  queue: StudyCard[];
+  counts: StudyCounts;
+} {
+  const uniqueFolderIds = [...new Set(folderIds)];
+  const uniqueRootFolderIds = [...new Set(rootFolderIds)];
+
+  if (uniqueFolderIds.length === 0) {
+    return { queue: [], counts: { new: 0, learning: 0, review: 0 } };
+  }
+
+  const schedulerPreferences = getSchedulerPreferences();
+  const nowIso = now.toISOString();
+  const today = jstDayStart(now, schedulerPreferences.nextDayStartsHour).toISOString();
+
+  const availableCards = cards.filter((card) => !card.isDeleted && !card.isSuspended);
+  if (availableCards.length === 0) {
+    return { queue: [], counts: { new: 0, learning: 0, review: 0 } };
+  }
+
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
+  const selectedRootIds = normalizeRootIds(
+    uniqueRootFolderIds.length > 0 ? uniqueRootFolderIds : uniqueFolderIds,
+    folderMap,
+  );
+  const limitDeckIdsByFolder = new Map<string, string[]>();
+
+  for (const card of availableCards) {
+    if (!limitDeckIdsByFolder.has(card.folderId)) {
+      limitDeckIdsByFolder.set(
+        card.folderId,
+        getLimitDeckIds(card.folderId, selectedRootIds, folderMap),
+      );
+    }
+  }
+
+  const sessionDeckId = uniqueRootFolderIds[0] ?? uniqueFolderIds[0];
+  const availableCardIds = new Set(availableCards.map((card) => card.id));
+  const cardMap = new Map(availableCards.map((card) => [card.id, card]));
+  const relevantStates = states.filter((state) => availableCardIds.has(state.cardId));
+  const sessionDeckOptions = deckOptionsByFolder.get(sessionDeckId)
+    ?? deckOptionsDao.normalize(sessionDeckId);
+  const { newByDeck, reviewByDeck } = buildDailyUsage(logs, selectedRootIds, folderMap);
+
+  const rawCandidates: DueCandidate[] = [];
+
+  for (const state of relevantStates) {
+    const card = cardMap.get(state.cardId);
+    if (!card) continue;
+
+    const isInterdayLearning = isInterdayLearningState(state as StudyCard['cardState'], schedulerPreferences);
+    let isDue = false;
+    let priority = 5;
+
+    if (state.state === 'relearning' && !isInterdayLearning && state.due <= nowIso) {
+      isDue = true;
+      priority = 0;
+    } else if (state.state === 'learning' && !isInterdayLearning && state.due <= nowIso) {
+      isDue = true;
+      priority = 1;
+    } else if (isInterdayLearning && state.due <= today) {
+      isDue = true;
+      priority = 2;
+    } else if (state.state === 'review' && state.due <= today) {
+      isDue = true;
+      priority = 3;
+    } else if (state.state === 'newCard') {
+      isDue = true;
+      priority = 4;
+    }
+
+    if (!isDue) continue;
+
+    rawCandidates.push({
+      card,
+      cardState: state,
+      deckOptions: deckOptionsByFolder.get(card.folderId) ?? deckOptionsDao.normalize(card.folderId),
+      isInterdayLearning,
+      priority,
+      sortSeed: stableHash(card.id),
+      limitDeckIds: limitDeckIdsByFolder.get(card.folderId) ?? [card.folderId],
+    });
+  }
+
+  rawCandidates.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+
+    if (a.priority === 3) {
+      return compareReviewCards(a, b, sessionDeckOptions.reviewSortOrder);
+    }
+    if (a.priority === 4) {
+      return compareNewCards(a, b, sessionDeckOptions.newCardInsertionOrder);
+    }
+    return a.cardState.due.localeCompare(b.cardState.due);
+  });
+
+  const newUsage = new Map(newByDeck);
+  const reviewUsage = new Map(reviewByDeck);
+  const queue: StudyCard[] = [];
+  const counts: StudyCounts = { new: 0, learning: 0, review: 0 };
+
+  for (const candidate of rawCandidates) {
+    if (candidate.cardState.state === 'newCard') {
+      if (isLimitReached(candidate.limitDeckIds, newUsage, deckOptionsByFolder, 'newCard')) {
+        continue;
+      }
+      consumeLimit(newUsage, candidate.limitDeckIds);
+      counts.new += 1;
+    } else if (candidate.cardState.state === 'review' || candidate.isInterdayLearning) {
+      if (isLimitReached(candidate.limitDeckIds, reviewUsage, deckOptionsByFolder, 'review')) {
+        continue;
+      }
+      consumeLimit(reviewUsage, candidate.limitDeckIds);
+      counts.review += 1;
+    } else {
+      counts.learning += 1;
+    }
+
+    queue.push({
+      card: candidate.card,
+      cardState: candidate.cardState,
+      deckOptions: candidate.deckOptions,
+    });
+  }
+
+  return { queue, counts };
+}
+
 async function buildDueSnapshot(
   folderIds: string[],
   now: Date,
@@ -149,12 +323,6 @@ async function buildDueSnapshot(
   if (uniqueFolderIds.length === 0) {
     return { queue: [], counts: { new: 0, learning: 0, review: 0 } };
   }
-
-  const schedulerPreferences = getSchedulerPreferences();
-  const learnAhead = new Date(
-    now.getTime() + schedulerPreferences.learnAheadMinutes * 60000,
-  ).toISOString();
-  const today = jstDayStart(now, schedulerPreferences.nextDayStartsHour).toISOString();
 
   const cards = (await db.cards.where('folderId').anyOf(uniqueFolderIds).toArray())
     .filter((card) => !card.isDeleted && !card.isSuspended);
@@ -182,86 +350,24 @@ async function buildDueSnapshot(
   const allLimitDeckIds = [
     ...new Set(Array.from(limitDeckIdsByFolder.values()).flat()),
   ];
+  const sessionDeckId = uniqueRootFolderIds[0] ?? uniqueFolderIds[0];
   const cardIds = cards.map((card) => card.id);
-  const cardMap = new Map(cards.map((card) => [card.id, card]));
   const states = await db.cardStates.where('cardId').anyOf(cardIds).toArray();
-  const deckOptionsByFolder = await deckOptionsDao.getEffectiveMap(allLimitDeckIds);
+  const deckOptionsByFolder = await deckOptionsDao.getEffectiveMap([
+    ...allLimitDeckIds,
+    sessionDeckId,
+  ]);
   const logs = await revlogDao.getDailyLogs(cards.map((card) => card.folderId), now);
-  const { newByDeck, reviewByDeck } = buildDailyUsage(logs, selectedRootIds, folderMap);
-
-  const rawCandidates: DueCandidate[] = [];
-
-  for (const state of states) {
-    const card = cardMap.get(state.cardId);
-    if (!card) continue;
-
-    let isDue = false;
-    let priority = 4;
-
-    if (state.state === 'relearning' && state.due <= learnAhead) {
-      isDue = true;
-      priority = 0;
-    } else if (state.state === 'learning' && state.due <= learnAhead) {
-      isDue = true;
-      priority = 1;
-    } else if (state.state === 'review' && state.due <= today) {
-      isDue = true;
-      priority = 2;
-    } else if (state.state === 'newCard') {
-      isDue = true;
-      priority = 3;
-    }
-
-    if (!isDue) continue;
-
-    rawCandidates.push({
-      card,
-      cardState: state,
-      deckOptions: deckOptionsByFolder.get(card.folderId) ?? deckOptionsDao.normalize(card.folderId),
-      priority,
-      sortSeed: stableHash(card.id),
-      limitDeckIds: limitDeckIdsByFolder.get(card.folderId) ?? [card.folderId],
-    });
-  }
-
-  rawCandidates.sort((a, b) => {
-    if (a.priority !== b.priority) return a.priority - b.priority;
-
-    if (a.priority === 2) return compareReviewCards(a, b);
-    if (a.priority === 3) return compareNewCards(a, b);
-    return a.cardState.due.localeCompare(b.cardState.due);
+  return buildDueSnapshotFromData({
+    folderIds: uniqueFolderIds,
+    rootFolderIds: uniqueRootFolderIds,
+    now,
+    cards,
+    states,
+    folders,
+    logs,
+    deckOptionsByFolder,
   });
-
-  const newUsage = new Map(newByDeck);
-  const reviewUsage = new Map(reviewByDeck);
-  const queue: StudyCard[] = [];
-  const counts: StudyCounts = { new: 0, learning: 0, review: 0 };
-
-  for (const candidate of rawCandidates) {
-    if (candidate.cardState.state === 'newCard') {
-      if (isLimitReached(candidate.limitDeckIds, newUsage, deckOptionsByFolder, 'newCard')) {
-        continue;
-      }
-      consumeLimit(newUsage, candidate.limitDeckIds);
-      counts.new += 1;
-    } else if (candidate.cardState.state === 'review') {
-      if (isLimitReached(candidate.limitDeckIds, reviewUsage, deckOptionsByFolder, 'review')) {
-        continue;
-      }
-      consumeLimit(reviewUsage, candidate.limitDeckIds);
-      counts.review += 1;
-    } else {
-      counts.learning += 1;
-    }
-
-    queue.push({
-      card: candidate.card,
-      cardState: candidate.cardState,
-      deckOptions: candidate.deckOptions,
-    });
-  }
-
-  return { queue, counts };
 }
 
 export const cardStateDao = {

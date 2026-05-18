@@ -2,12 +2,56 @@ import Papa from 'papaparse';
 import { db } from '@/db/database';
 import { folderDao } from '@/db/folder-dao';
 import { cardDao } from '@/db/card-dao';
-import type { Folder } from '@/lib/types';
+import type { FlashCard, Folder } from '@/lib/types';
 
 export interface ImportResult {
   imported: number;
   skipped: number;
   errors: string[];
+}
+
+type CsvExportInput = {
+  folders: Folder[];
+  cards: FlashCard[];
+  folderIds: string[] | null;
+};
+
+export function exportCsvFromData({ folders, cards, folderIds }: CsvExportInput): string {
+  const activeFolders = folders.filter((folder) => !folder.isDeleted);
+  const folderMap = new Map<string, Folder>(activeFolders.map((folder) => [folder.id, folder]));
+
+  const getPath = (folderId: string): string => {
+    const parts: string[] = [];
+    let current = folderMap.get(folderId);
+    while (current) {
+      parts.unshift(current.name);
+      current = current.parentId ? folderMap.get(current.parentId) : undefined;
+    }
+    return parts.join('/');
+  };
+
+  const selectedFolderIds = folderIds
+    ? new Set<string>(folderIds)
+    : null;
+  if (selectedFolderIds) {
+    const queue = [...selectedFolderIds];
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      for (const folder of activeFolders) {
+        if (folder.parentId === currentId && !selectedFolderIds.has(folder.id)) {
+          selectedFolderIds.add(folder.id);
+          queue.push(folder.id);
+        }
+      }
+    }
+  }
+
+  const rows = cards
+    .filter((card) => !card.isDeleted)
+    .filter((card) => !selectedFolderIds || selectedFolderIds.has(card.folderId))
+    .map((card) => [card.front, card.back, getPath(card.folderId)]);
+
+  return Papa.unparse(rows);
 }
 
 export const csvService = {
@@ -100,32 +144,10 @@ export const csvService = {
   },
 
   async exportCsv(folderIds: string[] | null): Promise<string> {
-    // Build folder path cache
-    const allFolders = await folderDao.getAll();
-    const folderMap = new Map<string, Folder>(allFolders.map(f => [f.id, f]));
-
-    const getPath = (folderId: string): string => {
-      const parts: string[] = [];
-      let current = folderMap.get(folderId);
-      while (current) {
-        parts.unshift(current.name);
-        current = current.parentId ? folderMap.get(current.parentId) : undefined;
-      }
-      return parts.join('/');
-    };
-
-    let cards;
-    if (folderIds) {
-      const allFolderIds: string[] = [];
-      for (const id of folderIds) {
-        allFolderIds.push(...await folderDao.getSelfAndDescendantIds(id));
-      }
-      cards = await db.cards.where('folderId').anyOf(allFolderIds).toArray();
-    } else {
-      cards = await db.cards.toArray();
-    }
-
-    const rows = cards.map(c => [c.front, c.back, getPath(c.folderId)]);
-    return Papa.unparse(rows);
+    const [folders, cards] = await Promise.all([
+      db.folders.toArray(),
+      db.cards.toArray(),
+    ]);
+    return exportCsvFromData({ folders, cards, folderIds });
   },
 };

@@ -21,18 +21,37 @@ export const folderDao = {
   },
 
   async delete(id: string): Promise<void> {
-    // Soft-delete: mark folder + all descendants + their cards as isDeleted
     const descendantIds = await this.getDescendantIds(id);
     const allIds = [id, ...descendantIds];
     const now = nowISO();
+    const [folders, cards] = await Promise.all([
+      db.folders.where('id').anyOf(allIds).toArray(),
+      db.cards.where('folderId').anyOf(allIds).toArray(),
+    ]);
 
     await db.transaction('rw', [db.folders, db.cards], async () => {
-      // Soft-delete cards in these folders
-      await db.cards.where('folderId').anyOf(allIds)
-        .modify({ isDeleted: true, updatedAt: now });
-      // Soft-delete the folders themselves
-      await db.folders.where('id').anyOf(allIds)
-        .modify({ isDeleted: true, updatedAt: now });
+      await db.cards.bulkPut(
+        cards
+          .filter((card) => !card.isDeleted)
+          .map((card) => ({
+            ...card,
+            isDeleted: true,
+            deletedAt: now,
+            deleteBaseUpdatedAt: card.updatedAt,
+            updatedAt: now,
+          })),
+      );
+      await db.folders.bulkPut(
+        folders
+          .filter((folder) => !folder.isDeleted)
+          .map((folder) => ({
+            ...folder,
+            isDeleted: true,
+            deletedAt: now,
+            deleteBaseUpdatedAt: folder.updatedAt,
+            updatedAt: now,
+          })),
+      );
     });
   },
 
@@ -131,7 +150,7 @@ export const folderDao = {
 
   async getStudyCounts(folderId: string, now: Date): Promise<StudyCounts> {
     const schedulerPreferences = getSchedulerPreferences();
-    const learnAhead = new Date(now.getTime() + schedulerPreferences.learnAheadMinutes * 60000).toISOString();
+    const nowIso = now.toISOString();
     const today = jstDayStart(now, schedulerPreferences.nextDayStartsHour).toISOString();
 
     const cards = await db.cards.where('folderId').equals(folderId)
@@ -143,9 +162,13 @@ export const folderDao = {
 
     let newCount = 0, learningCount = 0, reviewCount = 0;
     for (const s of states) {
+      const isInterdayLearning = (s.state === 'learning' || s.state === 'relearning')
+        && s.due === jstDayStart(new Date(s.due), schedulerPreferences.nextDayStartsHour).toISOString();
+
       if (s.state === 'newCard') newCount++;
-      else if ((s.state === 'learning' || s.state === 'relearning') && s.due <= learnAhead) learningCount++;
-      else if (s.state === 'review' && s.due <= today) reviewCount++;
+      else if ((s.state === 'learning' || s.state === 'relearning') && !isInterdayLearning && s.due <= nowIso) learningCount++;
+      else if (((s.state === 'learning' || s.state === 'relearning') && isInterdayLearning && s.due <= today)
+        || (s.state === 'review' && s.due <= today)) reviewCount++;
     }
 
     return { new: newCount, learning: learningCount, review: reviewCount };
