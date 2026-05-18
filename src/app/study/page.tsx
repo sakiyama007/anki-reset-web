@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { BookOpen } from 'lucide-react';
+import { BookOpen, CheckSquare, XSquare } from 'lucide-react';
 import { folderDao } from '@/db/folder-dao';
 import { useFolderStore } from '@/stores/folder-store';
 import { FolderNode } from '@/components/folder/folder-node';
@@ -41,10 +41,19 @@ export default function StudySelectPage() {
     });
   };
 
+  const selectAllFolders = async () => {
+    const allFolders = await folderDao.getAll();
+    setSelectedIds(new Set(allFolders.map((folder) => folder.id)));
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
   const handleStartStudy = async () => {
     if (selectedIds.size === 0) return;
     const allIds: string[] = [];
-    const rootIds = Array.from(selectedIds);
+    const rootIds = await folderDao.getSelectedRootIds(Array.from(selectedIds));
     for (const id of rootIds) {
       allIds.push(...(await folderDao.getSelfAndDescendantIds(id)));
     }
@@ -55,10 +64,26 @@ export default function StudySelectPage() {
     <AppShell>
       <div className="flex flex-col h-full">
         <header className="px-4 py-3 border-b border-border bg-background sticky top-0 z-10">
-          <h1 className="text-lg font-bold">学習</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            フォルダを選択して学習を開始
-          </p>
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <h1 className="text-lg font-bold">学習</h1>
+              <p className="text-sm text-muted-foreground mt-1">
+                フォルダを選択して学習を開始
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={selectedIds.size === 0 ? selectAllFolders : clearSelection}
+            >
+              {selectedIds.size === 0 ? (
+                <CheckSquare size={16} className="mr-1" />
+              ) : (
+                <XSquare size={16} className="mr-1" />
+              )}
+              {selectedIds.size === 0 ? '全選択' : '選択解除'}
+            </Button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-auto">

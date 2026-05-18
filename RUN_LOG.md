@@ -44,6 +44,23 @@ Append one entry per execution/session.
 ### Next Steps
 - Confirm Vercel deployment status in the Vercel dashboard if needed.
 
+## 2026-05-18 JST - Add web study select all
+
+### User Request
+- Investigate why the latest change is not visible after reload on Vercel.
+
+### Cause
+- The previous "select all in study phase" fix was applied to the Android app under `anki_reset`, not to the Vercel-served web app under `anki-reset-web`.
+- The earlier Vercel push deployed web scheduler/sync changes, but did not include a web study select-all UI change.
+
+### Changes
+- Added all-select / clear-selection controls to the web study selection page.
+- Normalized selected folders to root folders before starting a study session to avoid duplicated parent/child folder parameters.
+
+### Verification
+- `npm.cmd run build`
+- `npm.cmd run lint`
+
 ## 2026-05-17 JST - Interday learning review usage fix
 
 ### User Request
