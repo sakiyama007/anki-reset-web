@@ -24,6 +24,59 @@ Append one entry per execution/session.
 - ...
 ```
 
+## 2026-05-19 JST - Restore Anki learn-ahead and learning fuzz
+
+### User Request
+- Fix the two remaining Anki-parity notes: learn-ahead should follow Anki's default 20-minute behavior, and learning cards should receive the Anki learning fuzz.
+
+### Changes
+- Changed learn-ahead from the temporary fixed 60-second window back to the scheduler preference, whose default is 20 minutes.
+- Kept learn-ahead limited to empty-queue situations so normal due/new cards are still consumed first.
+- Restored up-to-5-minute actual due fuzz for same-day learning cards while keeping preview mode unfuzzed.
+- Applied the same learning fuzz path to review lapses entering relearning.
+
+### Verification
+- Inline SM-2 Anki parity diagnostics passed, including Hard behavior, review interval progression, lapse/relearning fuzz, and 20-minute learn-ahead.
+- `npm.cmd run build`
+- `npm.cmd run lint`
+
+## 2026-05-19 JST - Fix immediate <1min learn-ahead
+
+### User Request
+- Fix `<1min` so that when the study queue runs out, cards due within one minute are shown again immediately, matching Anki behavior more closely.
+
+### Changes
+- Added learn-ahead queue building for intraday learning/relearning cards due within 60 seconds.
+- Limited immediate learn-ahead use to the point where the normal queue is empty, so other due/new cards are consumed first.
+- Removed same-day learning due fuzz so `<1min` button previews and stored due timestamps stay aligned.
+
+### Verification
+- Ran a targeted learn-ahead queue behavior check with a due-in-60s learning card and a due-in-61s control.
+- Ran a targeted scheduler check confirming `Again` on a new card stores an exact 60-second learning due.
+- `npm.cmd run build`
+- `npm.cmd run lint`
+
+## 2026-05-19 JST - SM-2 focused diagnostics
+
+### User Request
+- Test whether the SM-2 algorithm works accurately, especially Hard behavior and interval changes as learning progresses.
+
+### Checks
+- Compared current implementation against Anki manual behavior for learning steps, Hard, graduation, review intervals, lapse/relearning, and learn-ahead.
+- Ran an inline Node/Sucrase diagnostic script against `src/services/sm2-engine.ts` and `src/db/card-state-dao.ts`.
+- Verified new-card `Hard` stays in learning step 0 with a 6-minute delay, and learning step 1 `Hard` repeats the 10-minute step.
+- Verified repeated `Good` review progression under default SM-2 settings: `1d -> 3d -> 8d -> 20d -> 50d -> 125d`.
+- Verified current `<1min` learn-ahead behavior: normal queue excludes future cards, empty-queue learn-ahead includes due-in-60s cards and excludes due-in-61s / Hard+6m cards.
+
+### Verification
+- Inline SM-2 focused diagnostics passed.
+- `npm.cmd run build`
+- `npm.cmd run lint`
+
+### Notes
+- Current implementation intentionally differs from Anki defaults for learn-ahead scope: it uses 60 seconds for the user's requested `<1min` behavior instead of Anki's default 20 minutes.
+- Current implementation does not add Anki's same-day learning fuzz after this session's `<1min` fix; review-card fuzz remains implemented.
+
 ## 2026-05-18 JST - Deploy current web fixes
 
 ### User Request

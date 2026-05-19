@@ -165,6 +165,7 @@ type DueSnapshotInput = {
   folderIds: string[];
   rootFolderIds?: string[];
   now: Date;
+  learnAheadUntil?: Date;
   cards: FlashCard[];
   states: CardState[];
   folders: Folder[];
@@ -176,6 +177,7 @@ export function buildDueSnapshotFromData({
   folderIds,
   rootFolderIds = folderIds,
   now,
+  learnAheadUntil,
   cards,
   states,
   folders,
@@ -194,6 +196,7 @@ export function buildDueSnapshotFromData({
 
   const schedulerPreferences = getSchedulerPreferences();
   const nowIso = now.toISOString();
+  const learnAheadIso = learnAheadUntil?.toISOString();
   const today = jstDayStart(now, schedulerPreferences.nextDayStartsHour).toISOString();
 
   const availableCards = cards.filter((card) => !card.isDeleted && !card.isSuspended);
@@ -235,10 +238,19 @@ export function buildDueSnapshotFromData({
     let isDue = false;
     let priority = 5;
 
-    if (state.state === 'relearning' && !isInterdayLearning && state.due <= nowIso) {
+    const isIntradayLearningDue =
+      !isInterdayLearning
+      && state.due <= nowIso;
+    const isIntradayLearningAhead =
+      !isInterdayLearning
+      && !!learnAheadIso
+      && state.due > nowIso
+      && state.due <= learnAheadIso;
+
+    if (state.state === 'relearning' && (isIntradayLearningDue || isIntradayLearningAhead)) {
       isDue = true;
       priority = 0;
-    } else if (state.state === 'learning' && !isInterdayLearning && state.due <= nowIso) {
+    } else if (state.state === 'learning' && (isIntradayLearningDue || isIntradayLearningAhead)) {
       isDue = true;
       priority = 1;
     } else if (isInterdayLearning && state.due <= today) {
@@ -313,6 +325,7 @@ async function buildDueSnapshot(
   folderIds: string[],
   now: Date,
   rootFolderIds: string[] = folderIds,
+  learnAheadUntil?: Date,
 ): Promise<{
   queue: StudyCard[];
   counts: StudyCounts;
@@ -367,6 +380,7 @@ async function buildDueSnapshot(
     folders,
     logs,
     deckOptionsByFolder,
+    learnAheadUntil,
   });
 }
 
@@ -386,6 +400,15 @@ export const cardStateDao = {
   async getDueCards(folderIds: string[], now: Date, rootFolderIds: string[] = folderIds): Promise<StudyCard[]> {
     const snapshot = await buildDueSnapshot(folderIds, now, rootFolderIds);
     return snapshot.queue;
+  },
+
+  async getDueSnapshotWithLearnAhead(
+    folderIds: string[],
+    now: Date,
+    learnAheadUntil: Date,
+    rootFolderIds: string[] = folderIds,
+  ): Promise<{ queue: StudyCard[]; counts: StudyCounts }> {
+    return buildDueSnapshot(folderIds, now, rootFolderIds, learnAheadUntil);
   },
 
   async getNextLearnDue(folderIds: string[], now: Date): Promise<Date | null> {

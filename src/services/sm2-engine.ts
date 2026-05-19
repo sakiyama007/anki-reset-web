@@ -214,7 +214,7 @@ function processReview(
         lapseCount: current.lapseCount + 1,
         easeFactor: newEase,
         interval: newInterval,
-        due: new Date(now.getTime() + steps[0] * 60000).toISOString(),
+        due: scheduleLearningDue(current, rating, now, steps[0], schedulerPreferences, mode),
       });
     }
 
