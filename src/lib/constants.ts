@@ -26,6 +26,8 @@ export const AppConstants = {
 
   // Learn-ahead buffer
   learnAheadMinutes: 20,
+  oneMinuteWindowSeconds: 60,
+  oneMinuteQueueLimit: 5,
 
   // Daily defaults
   defaultNewCardsPerDay: 20,

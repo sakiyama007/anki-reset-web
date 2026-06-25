@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect, useRef } from 'react';
+import { Suspense, useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Trash2 } from 'lucide-react';
 import { cardDao } from '@/db/card-dao';
@@ -28,6 +28,7 @@ function CardEditorPage() {
   const [currentCard, setCurrentCard] = useState<FlashCard | null>(null);
   const refresh = useFolderStore((s) => s.refresh);
   const frontRef = useRef<HTMLTextAreaElement>(null);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     frontRef.current?.focus();
@@ -46,25 +47,35 @@ function CardEditorPage() {
   }, [cardId]);
 
   const handleSave = async () => {
-    if (!front.trim() || !back.trim()) return;
+    if (savingRef.current || !front.trim() || !back.trim()) return;
+    savingRef.current = true;
     setSaving(true);
 
-    if (isEdit && cardId) {
-      const existing = currentCard ?? await cardDao.getById(cardId);
-      if (existing) {
-        await cardDao.update({ ...existing, front: front.trim(), back: back.trim() });
+    try {
+      if (isEdit && cardId) {
+        const existing = currentCard ?? await cardDao.getById(cardId);
+        if (existing) {
+          await cardDao.update({ ...existing, front: front.trim(), back: back.trim() });
+        }
+        refresh();
+        router.back();
+      } else {
+        await cardDao.insert(front.trim(), back.trim(), folderId);
+        refresh();
+        setFront('');
+        setBack('');
+        frontRef.current?.focus();
       }
-      refresh();
-      router.back();
-    } else {
-      await cardDao.insert(front.trim(), back.trim(), folderId);
-      refresh();
-      setFront('');
-      setBack('');
-      frontRef.current?.focus();
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
+  };
 
-    setSaving(false);
+  const handleBackKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || !event.ctrlKey) return;
+    event.preventDefault();
+    void handleSave();
   };
 
   const handleReactivate = async () => {
@@ -119,6 +130,7 @@ function CardEditorPage() {
           <Textarea
             value={back}
             onChange={(e) => setBack(e.target.value)}
+            onKeyDown={handleBackKeyDown}
             placeholder="裏面のテキスト"
           />
         </div>

@@ -8,9 +8,10 @@ interface FolderState {
   expandedIds: Set<string>;
   refresh: () => void;
   toggleExpanded: (id: string) => void;
-  createFolder: (name: string, parentId: string | null) => Promise<void>;
+  createFolder: (name: string, parentId: string | null) => Promise<string>;
   renameFolder: (id: string, newName: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
+  moveFolders: (ids: string[], targetParentId: string | null) => Promise<void>;
 }
 
 export const useFolderStore = create<FolderState>((set, get) => ({
@@ -36,8 +37,9 @@ export const useFolderStore = create<FolderState>((set, get) => ({
     if (exists) {
       throw new Error('同じ名前のフォルダが既に存在します');
     }
-    await folderDao.insert(name, parentId);
+    const folder = await folderDao.insert(name, parentId);
     get().refresh();
+    return folder.id;
   },
 
   renameFolder: async (id: string, newName: string) => {
@@ -53,6 +55,11 @@ export const useFolderStore = create<FolderState>((set, get) => ({
 
   deleteFolder: async (id: string) => {
     await folderDao.delete(id);
+    get().refresh();
+  },
+
+  moveFolders: async (ids: string[], targetParentId: string | null) => {
+    await folderDao.moveMany(ids, targetParentId);
     get().refresh();
   },
 }));

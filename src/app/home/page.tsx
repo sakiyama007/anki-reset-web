@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { FolderPlus, BookOpen, CheckSquare, Trash2, X } from 'lucide-react';
+import { FolderPlus, BookOpen, CheckSquare, FolderInput, Trash2, X } from 'lucide-react';
 import { folderDao } from '@/db/folder-dao';
 import { deckOptionsDao } from '@/db/deck-options-dao';
 import { useFolderStore } from '@/stores/folder-store';
 import { FolderNode } from '@/components/folder/folder-node';
 import { FolderContextMenu } from '@/components/folder/folder-context-menu';
+import { FolderMoveDialog } from '@/components/folder/folder-move-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogTitle, DialogActions } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -52,6 +53,7 @@ export default function HomePage() {
   const [renameDialog, setRenameDialog] = useState<FolderInfo | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<FolderInfo | null>(null);
   const [deleteBatchConfirm, setDeleteBatchConfirm] = useState(false);
+  const [moveDialog, setMoveDialog] = useState<{ folderIds: string[] } | null>(null);
   const [deckOptionsDialog, setDeckOptionsDialog] = useState<FolderInfo | null>(null);
   const [deckOptionsForm, setDeckOptionsForm] = useState<DeckOptionsForm | null>(null);
   const [hasOwnDeckOptions, setHasOwnDeckOptions] = useState(false);
@@ -60,7 +62,7 @@ export default function HomePage() {
   const [deckOptionsError, setDeckOptionsError] = useState('');
 
   const revision = useFolderStore((s) => s.revision);
-  const { createFolder, renameFolder, deleteFolder, refresh } = useFolderStore();
+  const { createFolder, renameFolder, deleteFolder, moveFolders, refresh } = useFolderStore();
 
   const isSelecting = selectedIds.size > 0;
 
@@ -142,6 +144,13 @@ export default function HomePage() {
     if (!deleteDialog) return;
     await deleteFolder(deleteDialog.folder.id);
     setDeleteDialog(null);
+  };
+
+  const handleMoveFolders = async (targetParentId: string | null) => {
+    if (!moveDialog) return;
+    await moveFolders(moveDialog.folderIds, targetParentId);
+    setMoveDialog(null);
+    clearSelection();
   };
 
   const openDeckOptionsDialog = async (info: FolderInfo) => {
@@ -228,6 +237,13 @@ export default function HomePage() {
                 <Button size="sm" onClick={handleStudySelected}>
                   <BookOpen size={16} className="mr-1" /> 学習
                 </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setMoveDialog({ folderIds: Array.from(selectedIds) })}
+                >
+                  <FolderInput size={16} className="mr-1" /> 移動
+                </Button>
                 <Button size="sm" variant="destructive" onClick={() => setDeleteBatchConfirm(true)}>
                   <Trash2 size={16} />
                 </Button>
@@ -310,6 +326,7 @@ export default function HomePage() {
             setError('');
             setCreateDialog({ parentId });
           }}
+          onMove={(info) => setMoveDialog({ folderIds: [info.folder.id] })}
           onDeckOptions={openDeckOptionsDialog}
           onRename={(info) => {
             setFolderName(info.folder.name);
@@ -319,6 +336,14 @@ export default function HomePage() {
           onDelete={(info) => setDeleteDialog(info)}
         />
       )}
+
+      <FolderMoveDialog
+        open={moveDialog !== null}
+        sourceFolderIds={moveDialog?.folderIds ?? []}
+        onClose={() => setMoveDialog(null)}
+        onMove={handleMoveFolders}
+        onCreateFolder={createFolder}
+      />
 
       {/* Create folder dialog */}
       <Dialog open={createDialog !== null} onClose={() => setCreateDialog(null)}>

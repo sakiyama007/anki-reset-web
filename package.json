@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint . --ext .js,.jsx,.ts,.tsx"
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "test:sm2": "node scripts/sm2-diagnostics.cjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

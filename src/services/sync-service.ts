@@ -1,8 +1,10 @@
 import { db } from '@/db/database';
 import { deckOptionsDao, getEffectiveDeckOptionsMapFromData } from '@/db/deck-options-dao';
+import { syncOutboxDao } from '@/db/sync-outbox-dao';
 import { findSyncFile, downloadSyncFile, uploadSyncFile } from '@/lib/google-drive';
 import { AppConstants } from '@/lib/constants';
 import { getDeviceId } from '@/lib/utils';
+import { getToken } from '@/lib/google-auth';
 import type {
   SyncPayload,
   Folder,
@@ -400,6 +402,22 @@ function mergeRecords<T extends { updatedAt: string }>(
   return Array.from(map.values());
 }
 
+function mergeRevlogsAppendOnly(local: Revlog[], remote: Revlog[]): Revlog[] {
+  const map = new Map<string, Revlog>();
+
+  for (const log of local) {
+    map.set(log.id, log);
+  }
+
+  for (const log of remote) {
+    if (!map.has(log.id)) {
+      map.set(log.id, log);
+    }
+  }
+
+  return Array.from(map.values()).sort(compareRevlogs);
+}
+
 function compareRevlogs(a: Revlog, b: Revlog): number {
   const reviewedAt = a.reviewedAt.localeCompare(b.reviewedAt);
   if (reviewedAt !== 0) return reviewedAt;
@@ -608,11 +626,7 @@ function mergeSyncData(local: SyncPayload, remote: SyncPayload): MergedSyncData 
     remote.data.deckOptions ?? [],
     (options: DeckOptions) => options.folderId,
   );
-  const mergedRevlogs = mergeRecords(
-    local.data.revlogs ?? [],
-    remote.data.revlogs ?? [],
-    (log: Revlog) => log.id,
-  );
+  const mergedRevlogs = mergeRevlogsAppendOnly(local.data.revlogs ?? [], remote.data.revlogs ?? []);
   const reconciledFolders = reviveDeletedFolderChain(mergedFolders, mergedCards);
   const resolvedStates = rebuildCardStates(
     mergedCards,
@@ -644,25 +658,103 @@ async function mergeAndPersist(remote: SyncPayload): Promise<void> {
   });
 }
 
+async function rebuildLocalCardStatesFromRevlogs(): Promise<void> {
+  const [folders, cards, fallbackStates, deckOptions, revlogs] = await Promise.all([
+    db.folders.toArray(),
+    db.cards.toArray(),
+    db.cardStates.toArray(),
+    db.deckOptions.toArray(),
+    db.revlogs.toArray(),
+  ]);
+  const rebuiltStates = rebuildCardStates(cards, fallbackStates, folders, deckOptions, revlogs);
+
+  await db.transaction('rw', db.cardStates, async () => {
+    await db.cardStates.bulkPut(rebuiltStates);
+  });
+}
+
+async function syncWithToken(token: string): Promise<{ pulled: boolean; pushed: boolean }> {
+  let pulled = false;
+  let pushed = false;
+
+  const fileId = await findSyncFile(token);
+  if (fileId) {
+    const content = await downloadSyncFile(token, fileId);
+    const remote = sanitizeSyncPayload(JSON.parse(content));
+    await mergeAndPersist(remote);
+    pulled = true;
+  }
+
+  const payload = await exportLocal();
+  const jsonStr = JSON.stringify(payload);
+  await uploadSyncFile(token, jsonStr, fileId ?? undefined);
+  await syncOutboxDao.markUnsentSynced(new Date().toISOString());
+  pushed = true;
+
+  return { pulled, pushed };
+}
+
+let autoSyncTimer: number | null = null;
+let autoSyncPromise: Promise<void> | null = null;
+let autoSyncListenersInstalled = false;
+
+function canUseBrowserAutoSync(): boolean {
+  return typeof window !== 'undefined';
+}
+
+function installAutoSyncListeners(): void {
+  if (!canUseBrowserAutoSync() || autoSyncListenersInstalled) return;
+
+  window.addEventListener('online', () => syncService.scheduleAutoSync(1000));
+  window.addEventListener('focus', () => syncService.scheduleAutoSync(1000));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      syncService.scheduleAutoSync(1000);
+    }
+  });
+  autoSyncListenersInstalled = true;
+}
+
+async function runAutoSync(): Promise<void> {
+  if (!canUseBrowserAutoSync()) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+  const token = getToken();
+  if (!token) return;
+  if (!(await syncOutboxDao.hasUnsent())) return;
+
+  try {
+    await syncWithToken(token);
+  } catch (error) {
+    await syncOutboxDao.markUnsentFailed(error, new Date().toISOString());
+    throw error;
+  }
+}
+
 export const syncService = {
   async sync(token: string): Promise<{ pulled: boolean; pushed: boolean }> {
-    let pulled = false;
-    let pushed = false;
+    return syncWithToken(token);
+  },
 
-    const fileId = await findSyncFile(token);
-    if (fileId) {
-      const content = await downloadSyncFile(token, fileId);
-      const remote = sanitizeSyncPayload(JSON.parse(content));
-      await mergeAndPersist(remote);
-      pulled = true;
-    }
+  scheduleAutoSync(delayMs = 2000): void {
+    if (!canUseBrowserAutoSync()) return;
+    installAutoSyncListeners();
+    if (autoSyncTimer) window.clearTimeout(autoSyncTimer);
+    autoSyncTimer = window.setTimeout(() => {
+      autoSyncTimer = null;
+      if (autoSyncPromise) return;
+      autoSyncPromise = runAutoSync()
+        .catch((error) => {
+          console.warn('Auto sync failed', error);
+        })
+        .finally(() => {
+          autoSyncPromise = null;
+        });
+    }, delayMs);
+  },
 
-    const payload = await exportLocal();
-    const jsonStr = JSON.stringify(payload);
-    await uploadSyncFile(token, jsonStr, fileId ?? undefined);
-    pushed = true;
-
-    return { pulled, pushed };
+  async rebuildLocalCardStatesFromRevlogs(): Promise<void> {
+    await rebuildLocalCardStatesFromRevlogs();
   },
 };
 

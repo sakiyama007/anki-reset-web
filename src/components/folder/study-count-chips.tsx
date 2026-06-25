@@ -3,7 +3,7 @@
 import type { FolderInfo } from '@/lib/types';
 
 export function StudyCountChips({ info }: { info: FolderInfo }) {
-  const hasAny = info.newCount > 0 || info.learningCount > 0 || info.reviewCount > 0;
+  const hasAny = info.newCount > 0 || info.oneMinuteCount > 0 || info.learningCount > 0 || info.reviewCount > 0;
 
   if (!hasAny) {
     return (
@@ -19,6 +19,11 @@ export function StudyCountChips({ info }: { info: FolderInfo }) {
       {info.newCount > 0 && (
         <span className="px-1.5 py-0.5 text-xs font-semibold rounded bg-blue-500/15 text-blue-600">
           新{info.newCount}
+        </span>
+      )}
+      {info.oneMinuteCount > 0 && (
+        <span className="px-1.5 py-0.5 text-xs font-semibold rounded bg-red-500/15 text-red-600">
+          1m{info.oneMinuteCount}
         </span>
       )}
       {info.learningCount > 0 && (

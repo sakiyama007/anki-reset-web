@@ -104,6 +104,19 @@ export interface Revlog {
   newCardStateSnapshot?: CardState;
 }
 
+export type SyncOutboxStatus = 'pending' | 'failed' | 'synced';
+
+export interface SyncOutboxItem {
+  id: string;
+  itemType: 'revlog';
+  itemId: string;
+  status: SyncOutboxStatus;
+  attemptCount: number;
+  createdAt: string;
+  updatedAt: string;
+  lastError?: string;
+}
+
 export interface StudyCard {
   card: FlashCard;
   cardState: CardState;
@@ -115,12 +128,14 @@ export interface FolderInfo {
   cardCount: number;
   subfolderCount: number;
   newCount: number;
+  oneMinuteCount: number;
   learningCount: number;
   reviewCount: number;
 }
 
 export interface StudyCounts {
   new: number;
+  oneMinute: number;
   learning: number;
   review: number;
 }

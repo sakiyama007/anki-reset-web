@@ -1,15 +1,25 @@
 import { db } from './database';
 import { deckOptionsDao } from './deck-options-dao';
 import { revlogDao } from './revlog-dao';
+import { AppConstants } from '@/lib/constants';
 import type { CardState, DeckOptions, FlashCard, Folder, Revlog, StudyCard, StudyCounts } from '@/lib/types';
 import { getSchedulerPreferences, jstDayStart } from '@/lib/utils';
 
 type DueCandidate = StudyCard & {
-  isInterdayLearning: boolean;
+  countBucket: keyof StudyCounts;
+  isStarterOneMinute: boolean;
   priority: number;
   sortSeed: number;
   limitDeckIds: string[];
 };
+
+function emptyStudyCounts(): StudyCounts {
+  return { new: 0, oneMinute: 0, learning: 0, review: 0 };
+}
+
+function isMediumOrBetterRating(log: Revlog): boolean {
+  return log.rating === 'good' || log.rating === 'easy';
+}
 
 function stableHash(input: string): number {
   let hash = 0;
@@ -170,6 +180,7 @@ type DueSnapshotInput = {
   states: CardState[];
   folders: Folder[];
   logs: Revlog[];
+  goodOrEasyCardIds?: Set<string>;
   deckOptionsByFolder: Map<string, DeckOptions>;
 };
 
@@ -182,6 +193,7 @@ export function buildDueSnapshotFromData({
   states,
   folders,
   logs,
+  goodOrEasyCardIds = new Set(logs.filter(isMediumOrBetterRating).map((log) => log.cardId)),
   deckOptionsByFolder,
 }: DueSnapshotInput): {
   queue: StudyCard[];
@@ -191,17 +203,20 @@ export function buildDueSnapshotFromData({
   const uniqueRootFolderIds = [...new Set(rootFolderIds)];
 
   if (uniqueFolderIds.length === 0) {
-    return { queue: [], counts: { new: 0, learning: 0, review: 0 } };
+    return { queue: [], counts: emptyStudyCounts() };
   }
 
   const schedulerPreferences = getSchedulerPreferences();
   const nowIso = now.toISOString();
   const learnAheadIso = learnAheadUntil?.toISOString();
+  const oneMinuteUntilIso = new Date(
+    now.getTime() + AppConstants.oneMinuteWindowSeconds * 1000,
+  ).toISOString();
   const today = jstDayStart(now, schedulerPreferences.nextDayStartsHour).toISOString();
 
   const availableCards = cards.filter((card) => !card.isDeleted && !card.isSuspended);
   if (availableCards.length === 0) {
-    return { queue: [], counts: { new: 0, learning: 0, review: 0 } };
+    return { queue: [], counts: emptyStudyCounts() };
   }
 
   const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
@@ -229,39 +244,62 @@ export function buildDueSnapshotFromData({
   const { newByDeck, reviewByDeck } = buildDailyUsage(logs, selectedRootIds, folderMap);
 
   const rawCandidates: DueCandidate[] = [];
+  const learnAheadCandidates: DueCandidate[] = [];
 
   for (const state of relevantStates) {
     const card = cardMap.get(state.cardId);
     if (!card) continue;
 
+    const isLearning = state.state === 'learning' || state.state === 'relearning';
     const isInterdayLearning = isInterdayLearningState(state as StudyCard['cardState'], schedulerPreferences);
     let isDue = false;
+    let countBucket: keyof StudyCounts = 'learning';
     let priority = 5;
 
     const isIntradayLearningDue =
-      !isInterdayLearning
+      isLearning
+      && !isInterdayLearning
       && state.due <= nowIso;
     const isIntradayLearningAhead =
-      !isInterdayLearning
+      isLearning
+      && !isInterdayLearning
       && !!learnAheadIso
       && state.due > nowIso
       && state.due <= learnAheadIso;
+    const isOneMinuteLearning =
+      isLearning
+      && !isInterdayLearning
+      && state.due <= oneMinuteUntilIso;
+    const isStarterOneMinute = isOneMinuteLearning && !goodOrEasyCardIds.has(state.cardId);
 
-    if (state.state === 'relearning' && (isIntradayLearningDue || isIntradayLearningAhead)) {
+    if (isLearning && isIntradayLearningDue) {
       isDue = true;
+      countBucket = isStarterOneMinute ? 'oneMinute' : 'learning';
       priority = 0;
-    } else if (state.state === 'learning' && (isIntradayLearningDue || isIntradayLearningAhead)) {
-      isDue = true;
-      priority = 1;
+    } else if (isIntradayLearningAhead) {
+      learnAheadCandidates.push({
+        card,
+        cardState: state,
+        deckOptions: deckOptionsByFolder.get(card.folderId) ?? deckOptionsDao.normalize(card.folderId),
+        countBucket: isStarterOneMinute ? 'oneMinute' : 'learning',
+        isStarterOneMinute,
+        priority: 4,
+        sortSeed: stableHash(card.id),
+        limitDeckIds: limitDeckIdsByFolder.get(card.folderId) ?? [card.folderId],
+      });
+      continue;
     } else if (isInterdayLearning && state.due <= today) {
       isDue = true;
-      priority = 2;
+      countBucket = 'review';
+      priority = 1;
     } else if (state.state === 'review' && state.due <= today) {
       isDue = true;
-      priority = 3;
+      countBucket = 'review';
+      priority = 2;
     } else if (state.state === 'newCard') {
       isDue = true;
-      priority = 4;
+      countBucket = 'new';
+      priority = 3;
     }
 
     if (!isDue) continue;
@@ -270,7 +308,8 @@ export function buildDueSnapshotFromData({
       card,
       cardState: state,
       deckOptions: deckOptionsByFolder.get(card.folderId) ?? deckOptionsDao.normalize(card.folderId),
-      isInterdayLearning,
+      countBucket,
+      isStarterOneMinute,
       priority,
       sortSeed: stableHash(card.id),
       limitDeckIds: limitDeckIdsByFolder.get(card.folderId) ?? [card.folderId],
@@ -280,10 +319,10 @@ export function buildDueSnapshotFromData({
   rawCandidates.sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
 
-    if (a.priority === 3) {
+    if (a.cardState.state === 'review' && b.cardState.state === 'review') {
       return compareReviewCards(a, b, sessionDeckOptions.reviewSortOrder);
     }
-    if (a.priority === 4) {
+    if (a.cardState.state === 'newCard' && b.cardState.state === 'newCard') {
       return compareNewCards(a, b, sessionDeckOptions.newCardInsertionOrder);
     }
     return a.cardState.due.localeCompare(b.cardState.due);
@@ -292,21 +331,23 @@ export function buildDueSnapshotFromData({
   const newUsage = new Map(newByDeck);
   const reviewUsage = new Map(reviewByDeck);
   const queue: StudyCard[] = [];
-  const counts: StudyCounts = { new: 0, learning: 0, review: 0 };
+  const counts = emptyStudyCounts();
 
   for (const candidate of rawCandidates) {
-    if (candidate.cardState.state === 'newCard') {
+    if (candidate.countBucket === 'new') {
       if (isLimitReached(candidate.limitDeckIds, newUsage, deckOptionsByFolder, 'newCard')) {
         continue;
       }
       consumeLimit(newUsage, candidate.limitDeckIds);
       counts.new += 1;
-    } else if (candidate.cardState.state === 'review' || candidate.isInterdayLearning) {
+    } else if (candidate.countBucket === 'review') {
       if (isLimitReached(candidate.limitDeckIds, reviewUsage, deckOptionsByFolder, 'review')) {
         continue;
       }
       consumeLimit(reviewUsage, candidate.limitDeckIds);
       counts.review += 1;
+    } else if (candidate.countBucket === 'oneMinute') {
+      if (counts.oneMinute < AppConstants.oneMinuteQueueLimit) counts.oneMinute += 1;
     } else {
       counts.learning += 1;
     }
@@ -316,6 +357,28 @@ export function buildDueSnapshotFromData({
       cardState: candidate.cardState,
       deckOptions: candidate.deckOptions,
     });
+  }
+
+  if (queue.length === 0 && learnAheadIso) {
+    learnAheadCandidates.sort((a, b) => {
+      const due = a.cardState.due.localeCompare(b.cardState.due);
+      if (due !== 0) return due;
+      return a.card.id.localeCompare(b.card.id);
+    });
+
+    for (const candidate of learnAheadCandidates) {
+      if (candidate.countBucket === 'oneMinute') {
+        if (counts.oneMinute < AppConstants.oneMinuteQueueLimit) counts.oneMinute += 1;
+      } else {
+        counts.learning += 1;
+      }
+
+      queue.push({
+        card: candidate.card,
+        cardState: candidate.cardState,
+        deckOptions: candidate.deckOptions,
+      });
+    }
   }
 
   return { queue, counts };
@@ -334,13 +397,13 @@ async function buildDueSnapshot(
   const uniqueRootFolderIds = [...new Set(rootFolderIds)];
 
   if (uniqueFolderIds.length === 0) {
-    return { queue: [], counts: { new: 0, learning: 0, review: 0 } };
+    return { queue: [], counts: emptyStudyCounts() };
   }
 
   const cards = (await db.cards.where('folderId').anyOf(uniqueFolderIds).toArray())
     .filter((card) => !card.isDeleted && !card.isSuspended);
   if (cards.length === 0) {
-    return { queue: [], counts: { new: 0, learning: 0, review: 0 } };
+    return { queue: [], counts: emptyStudyCounts() };
   }
 
   const folders = await db.folders.toArray();
@@ -370,7 +433,15 @@ async function buildDueSnapshot(
     ...allLimitDeckIds,
     sessionDeckId,
   ]);
-  const logs = await revlogDao.getDailyLogs(cards.map((card) => card.folderId), now);
+  const [logs, cardLogs] = await Promise.all([
+    revlogDao.getDailyLogs(cards.map((card) => card.folderId), now),
+    db.revlogs.where('cardId').anyOf(cardIds).toArray(),
+  ]);
+  const goodOrEasyCardIds = new Set(
+    cardLogs
+      .filter(isMediumOrBetterRating)
+      .map((log) => log.cardId),
+  );
   return buildDueSnapshotFromData({
     folderIds: uniqueFolderIds,
     rootFolderIds: uniqueRootFolderIds,
@@ -379,6 +450,7 @@ async function buildDueSnapshot(
     states,
     folders,
     logs,
+    goodOrEasyCardIds,
     deckOptionsByFolder,
     learnAheadUntil,
   });

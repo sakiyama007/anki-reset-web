@@ -10,11 +10,34 @@ export interface ImportResult {
   errors: string[];
 }
 
+export interface ImportOptions {
+  parentFolderId: string | null;
+  skipHeader?: boolean;
+}
+
 type CsvExportInput = {
   folders: Folder[];
   cards: FlashCard[];
   folderIds: string[] | null;
 };
+
+function normalizeHeaderCell(value: string | undefined): string {
+  return (value ?? '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function isHeaderRow(row: string[]): boolean {
+  const first = normalizeHeaderCell(row[0]);
+  const second = normalizeHeaderCell(row[1]);
+  const third = normalizeHeaderCell(row[2]);
+
+  const frontHeaders = new Set(['front', 'question', '表面', '問題', 'おもて']);
+  const backHeaders = new Set(['back', 'answer', '裏面', '答え', '解答', 'うら']);
+  const folderHeaders = new Set(['folder', 'folderpath', 'path', 'フォルダ', 'フォルダパス']);
+
+  return frontHeaders.has(first)
+    && backHeaders.has(second)
+    && (!third || folderHeaders.has(third));
+}
 
 export function exportCsvFromData({ folders, cards, folderIds }: CsvExportInput): string {
   const activeFolders = folders.filter((folder) => !folder.isDeleted);
@@ -55,19 +78,30 @@ export function exportCsvFromData({ folders, cards, folderIds }: CsvExportInput)
 }
 
 export const csvService = {
-  async importCsv(csvContent: string, parentFolderId: string | null): Promise<ImportResult> {
-    // Remove BOM
+  async importCsv(
+    csvContent: string,
+    parentFolderIdOrOptions: string | null | ImportOptions,
+  ): Promise<ImportResult> {
+    const options: ImportOptions = parentFolderIdOrOptions !== null && typeof parentFolderIdOrOptions === 'object'
+      ? parentFolderIdOrOptions
+      : { parentFolderId: parentFolderIdOrOptions };
+    const { parentFolderId, skipHeader = true } = options;
+
     const content = csvContent.replace(/^\uFEFF/, '');
     const parsed = Papa.parse<string[]>(content, { skipEmptyLines: true });
 
     const result: ImportResult = { imported: 0, skipped: 0, errors: [] };
-    const folderCache = new Map<string, string>(); // path -> folderId
+    const folderCache = new Map<string, string>();
     const cardsToInsert: Array<{ front: string; back: string; folderId: string }> = [];
 
     for (let i = 0; i < parsed.data.length; i++) {
       const row = parsed.data[i];
+      if (i === 0 && skipHeader && isHeaderRow(row)) {
+        continue;
+      }
+
       if (row.length < 2) {
-        result.errors.push(`行${i + 1}: カラム不足`);
+        result.errors.push(`行${i + 1}: 列が不足しています`);
         result.skipped++;
         continue;
       }
@@ -77,7 +111,7 @@ export const csvService = {
       const folderPath = row[2]?.trim() || '';
 
       if (!front || !back) {
-        result.errors.push(`行${i + 1}: 表面または裏面が空`);
+        result.errors.push(`行${i + 1}: 表面または裏面が空です`);
         result.skipped++;
         continue;
       }
@@ -87,7 +121,7 @@ export const csvService = {
         if (parentFolderId) {
           folderId = parentFolderId;
         } else {
-          result.errors.push(`行${i + 1}: フォルダパスが未指定`);
+          result.errors.push(`行${i + 1}: フォルダパスが未指定です`);
           result.skipped++;
           continue;
         }
@@ -127,7 +161,7 @@ export const csvService = {
       }
 
       const children = await folderDao.getChildren(currentParentId);
-      const existing = children.find(f => f.name === partName);
+      const existing = children.find((folder) => folder.name === partName);
 
       if (existing) {
         currentParentId = existing.id;

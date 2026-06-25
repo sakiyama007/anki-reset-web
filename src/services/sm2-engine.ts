@@ -4,8 +4,13 @@ import { getSchedulerPreferences, jstDayStart } from '@/lib/utils';
 
 type SchedulingMode = 'actual' | 'preview';
 
-function clampInterval(interval: number): number {
-  return Math.max(interval, 1);
+const SECONDS_PER_DAY = 24 * 60 * 60;
+const MS_PER_DAY = SECONDS_PER_DAY * 1000;
+
+interface ReviewIntervals {
+  hard: number;
+  good: number;
+  easy: number;
 }
 
 function stableHash(input: string): number {
@@ -19,6 +24,68 @@ function stableHash(input: string): number {
 
 function deterministicUnit(...parts: string[]): number {
   return (stableHash(parts.join('|')) % 1000000) / 1000000;
+}
+
+function fuzzUnit(current: CardState): number {
+  return deterministicUnit(current.cardId, String(current.repetition), 'anki-fuzz');
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function toSecs(minutes: number): number {
+  return Math.max(0, Math.trunc(minutes * 60));
+}
+
+function stepSecs(steps: number[], index: number): number | undefined {
+  const value = steps[index];
+  return typeof value === 'number' ? toSecs(value) : undefined;
+}
+
+function currentStepIndex(steps: number[], stepIndex: number): number {
+  if (steps.length === 0) return 0;
+  return clamp(Math.trunc(stepIndex), 0, steps.length - 1);
+}
+
+function maybeRoundInDays(secs: number): number {
+  if (secs > SECONDS_PER_DAY) {
+    return Math.round(secs / SECONDS_PER_DAY) * SECONDS_PER_DAY;
+  }
+  return secs;
+}
+
+function againDelaySecs(steps: number[]): number | undefined {
+  return stepSecs(steps, 0);
+}
+
+function hardDelaySecs(steps: number[], stepIndex: number): number | undefined {
+  const index = currentStepIndex(steps, stepIndex);
+  const current = stepSecs(steps, index) ?? stepSecs(steps, 0);
+  if (current === undefined) return undefined;
+
+  if (index !== 0) return current;
+
+  const next = stepSecs(steps, 1);
+  if (next !== undefined) {
+    return maybeRoundInDays(Math.trunc((current + next) / 2));
+  }
+
+  return maybeRoundInDays(Math.min(Math.trunc(current * 3 / 2), current + SECONDS_PER_DAY));
+}
+
+function goodDelaySecs(steps: number[], stepIndex: number): number | undefined {
+  return stepSecs(steps, currentStepIndex(steps, stepIndex) + 1);
+}
+
+function nextStepIndex(steps: number[], stepIndex: number): number {
+  return currentStepIndex(steps, stepIndex) + 1;
+}
+
+function minAndMaxReviewIntervals(minimum: number, maximumInterval: number): [number, number] {
+  const maximum = Math.max(1, Math.trunc(maximumInterval));
+  const clampedMinimum = clamp(Math.trunc(minimum), 1, maximum);
+  return [clampedMinimum, maximum];
 }
 
 export function createInitialCardState(cardId: string, createdAt: string): CardState {
@@ -35,30 +102,32 @@ export function createInitialCardState(cardId: string, createdAt: string): CardS
   };
 }
 
-/**
- * 日本時間 (JST) での now の翌 intervalDays 日後 0:00 を返す。
- * JST は通年 UTC+9 固定なので、24h × intervalDays で正確に進められる。
- */
 function dayDue(now: Date, intervalDays: number, schedulerPreferences: SchedulerPreferences): Date {
   const midnight = jstDayStart(now, schedulerPreferences.nextDayStartsHour);
-  return new Date(midnight.getTime() + intervalDays * 24 * 60 * 60 * 1000);
+  return new Date(midnight.getTime() + intervalDays * MS_PER_DAY);
 }
 
 function getInterdayStepDays(now: Date, target: Date, schedulerPreferences: SchedulerPreferences): number {
   const currentDayStart = jstDayStart(now, schedulerPreferences.nextDayStartsHour).getTime();
   const targetDayStart = jstDayStart(target, schedulerPreferences.nextDayStartsHour).getTime();
-  return Math.max(1, Math.round((targetDayStart - currentDayStart) / 86400000));
+  return Math.max(1, Math.round((targetDayStart - currentDayStart) / MS_PER_DAY));
+}
+
+function learningIntervalWithFuzz(current: CardState, secs: number): number {
+  const extra = Math.floor(Math.min(secs * 0.25, 300));
+  const upperExclusive = secs + extra;
+  if (secs >= upperExclusive) return secs;
+  return secs + Math.floor(fuzzUnit(current) * (upperExclusive - secs));
 }
 
 function scheduleLearningDue(
   current: CardState,
-  rating: Rating,
   now: Date,
-  delayMinutes: number,
+  delaySecs: number,
   schedulerPreferences: SchedulerPreferences,
   mode: SchedulingMode,
 ): string {
-  const target = new Date(now.getTime() + delayMinutes * 60000);
+  const target = new Date(now.getTime() + delaySecs * 1000);
   const isInterday = jstDayStart(target, schedulerPreferences.nextDayStartsHour).getTime()
     > jstDayStart(now, schedulerPreferences.nextDayStartsHour).getTime();
 
@@ -66,44 +135,99 @@ function scheduleLearningDue(
     return dayDue(now, getInterdayStepDays(now, target, schedulerPreferences), schedulerPreferences).toISOString();
   }
 
-  const fuzzMs = mode === 'actual'
-    ? Math.round(
-      deterministicUnit(
-        current.cardId,
-        rating,
-        now.toISOString(),
-        String(current.stepIndex),
-        'learning-fuzz',
-      ) * 5 * 60 * 1000,
-    )
-    : 0;
-
-  return new Date(target.getTime() + fuzzMs).toISOString();
+  const finalDelaySecs = mode === 'actual'
+    ? learningIntervalWithFuzz(current, delaySecs)
+    : delaySecs;
+  return new Date(now.getTime() + finalDelaySecs * 1000).toISOString();
 }
 
-function applyReviewFuzz(
-  current: CardState,
-  rating: Rating,
-  now: Date,
-  targetInterval: number,
-  maximumInterval: number,
-  mode: SchedulingMode,
-): number {
-  const clampedTarget = Math.min(clampInterval(targetInterval), maximumInterval);
-  if (mode === 'preview' || clampedTarget < 2) {
-    return clampedTarget;
+function fuzzDelta(interval: number): number {
+  if (interval < 2.5) return 0;
+
+  const first = 0.15 * (Math.min(interval, 7) - 2.5);
+  const second = 0.1 * Math.max(0, Math.min(interval, 20) - 7);
+  const third = 0.05 * Math.max(0, interval - 20);
+  return 1 + first + second + third;
+}
+
+function fuzzBounds(interval: number): [number, number] {
+  const delta = fuzzDelta(interval);
+  return [
+    Math.round(interval - delta),
+    Math.round(interval + delta),
+  ];
+}
+
+function constrainedFuzzBounds(interval: number, minimum: number, maximum: number): [number, number] {
+  const boundedInterval = clamp(interval, minimum, maximum);
+  let [lower, upper] = fuzzBounds(boundedInterval);
+
+  lower = clamp(lower, minimum, maximum);
+  upper = clamp(upper, minimum, maximum);
+
+  if (upper === lower && upper > 2 && upper < maximum) {
+    upper = lower + 1;
   }
 
-  const minInterval = Math.max(2, Math.round(clampedTarget * 0.95 - 1));
-  const maxInterval = Math.max(minInterval, Math.round(clampedTarget * 1.05 + 1));
-  const unit = deterministicUnit(current.cardId, rating, now.toISOString(), 'review-fuzz');
-  const fuzzed = minInterval + Math.floor(unit * (maxInterval - minInterval + 1));
+  return [lower, upper];
+}
 
-  return Math.min(maximumInterval, Math.max(current.interval + 1, fuzzed));
+function withReviewFuzz(
+  current: CardState,
+  interval: number,
+  minimum: number,
+  maximum: number,
+  fuzz: boolean,
+): number {
+  if (!fuzz) {
+    return clamp(Math.round(interval), minimum, maximum);
+  }
+
+  const [lower, upper] = constrainedFuzzBounds(interval, minimum, maximum);
+  return Math.floor(lower + fuzzUnit(current) * (1 + upper - lower));
+}
+
+function constrainPassingInterval(
+  current: CardState,
+  deckOptions: DeckOptions,
+  interval: number,
+  minimum: number,
+  fuzz: boolean,
+): number {
+  const multiplied = interval * deckOptions.intervalModifier;
+  const [clampedMinimum, maximum] = minAndMaxReviewIntervals(minimum, deckOptions.maximumInterval);
+  return withReviewFuzz(current, multiplied, clampedMinimum, maximum, fuzz);
+}
+
+function reviewIntervalWithFuzz(
+  current: CardState,
+  deckOptions: DeckOptions,
+  interval: number,
+  minimum = 1,
+): number {
+  const [clampedMinimum, maximum] = minAndMaxReviewIntervals(minimum, deckOptions.maximumInterval);
+  return withReviewFuzz(current, interval, clampedMinimum, maximum, true);
 }
 
 function copyState(current: CardState, overrides: Partial<CardState>): CardState {
   return { ...current, ...overrides };
+}
+
+function graduateLearning(
+  current: CardState,
+  now: Date,
+  deckOptions: DeckOptions,
+  schedulerPreferences: SchedulerPreferences,
+  intervalDays: number,
+): CardState {
+  const interval = reviewIntervalWithFuzz(current, deckOptions, intervalDays);
+  return copyState(current, {
+    state: 'review',
+    interval,
+    due: dayDue(now, interval, schedulerPreferences).toISOString(),
+    easeFactor: deckOptions.initialEaseFactor,
+    stepIndex: 0,
+  });
 }
 
 function processLearning(
@@ -117,59 +241,145 @@ function processLearning(
   const steps = deckOptions.learningStepsMinutes;
 
   switch (rating) {
-    case 'again':
-      return copyState(current, {
-        state: 'learning',
-        stepIndex: 0,
-        due: scheduleLearningDue(current, rating, now, steps[0], schedulerPreferences, mode),
-      });
-
-    case 'hard': {
-      const currentIdx = Math.min(Math.max(current.stepIndex, 0), steps.length - 1);
-      let delayMinutes: number;
-      if (currentIdx === 0 && steps.length > 1) {
-        delayMinutes = Math.round((steps[0] + steps[1]) / 2);
-      } else if (steps.length === 1) {
-        delayMinutes = Math.min(steps[0] * 1.5, steps[0] + 1440);
-      } else {
-        delayMinutes = steps[currentIdx];
+    case 'again': {
+      const delaySecs = againDelaySecs(steps);
+      if (delaySecs === undefined) {
+        return graduateLearning(current, now, deckOptions, schedulerPreferences, deckOptions.graduatingInterval);
       }
       return copyState(current, {
         state: 'learning',
-        stepIndex: currentIdx,
-        due: scheduleLearningDue(current, rating, now, delayMinutes, schedulerPreferences, mode),
+        stepIndex: 0,
+        due: scheduleLearningDue(current, now, delaySecs, schedulerPreferences, mode),
+      });
+    }
+
+    case 'hard': {
+      const delaySecs = hardDelaySecs(steps, current.stepIndex);
+      if (delaySecs === undefined) {
+        return graduateLearning(current, now, deckOptions, schedulerPreferences, deckOptions.graduatingInterval);
+      }
+      return copyState(current, {
+        state: 'learning',
+        stepIndex: currentStepIndex(steps, current.stepIndex),
+        due: scheduleLearningDue(current, now, delaySecs, schedulerPreferences, mode),
       });
     }
 
     case 'good': {
-      const nextStep = current.stepIndex + 1;
-      if (nextStep >= steps.length) {
-        return copyState(current, {
-          state: 'review',
-        interval: deckOptions.graduatingInterval,
-        due: dayDue(now, deckOptions.graduatingInterval, schedulerPreferences).toISOString(),
-        easeFactor: deckOptions.initialEaseFactor,
-        repetition: 1,
-        stepIndex: 0,
-      });
+      const delaySecs = goodDelaySecs(steps, current.stepIndex);
+      if (delaySecs === undefined) {
+        return graduateLearning(current, now, deckOptions, schedulerPreferences, deckOptions.graduatingInterval);
       }
       return copyState(current, {
         state: 'learning',
-        stepIndex: nextStep,
-        due: scheduleLearningDue(current, rating, now, steps[nextStep], schedulerPreferences, mode),
+        stepIndex: nextStepIndex(steps, current.stepIndex),
+        due: scheduleLearningDue(current, now, delaySecs, schedulerPreferences, mode),
       });
     }
 
     case 'easy':
-      return copyState(current, {
-        state: 'review',
-        interval: deckOptions.easyGraduationInterval,
-        due: dayDue(now, deckOptions.easyGraduationInterval, schedulerPreferences).toISOString(),
-        easeFactor: deckOptions.initialEaseFactor,
-        repetition: 1,
-        stepIndex: 0,
-      });
+      return graduateLearning(current, now, deckOptions, schedulerPreferences, deckOptions.easyGraduationInterval);
   }
+}
+
+function elapsedReviewDays(current: CardState, now: Date, schedulerPreferences: SchedulerPreferences): number {
+  const scheduledDays = Math.max(1, Math.trunc(current.interval));
+  const dueDay = jstDayStart(new Date(current.due), schedulerPreferences.nextDayStartsHour).getTime();
+  const today = jstDayStart(now, schedulerPreferences.nextDayStartsHour).getTime();
+  const daysFromDue = Math.round((today - dueDay) / MS_PER_DAY);
+  return Math.max(0, scheduledDays + daysFromDue);
+}
+
+function passingEarlyReviewIntervals(
+  current: CardState,
+  deckOptions: DeckOptions,
+  elapsedDays: number,
+): ReviewIntervals {
+  const scheduledDays = Math.max(1, Math.trunc(current.interval));
+  const elapsed = Math.max(0, elapsedDays);
+  const hardInterval = constrainPassingInterval(
+    current,
+    deckOptions,
+    Math.max(elapsed * deckOptions.hardMultiplier, scheduledDays * (deckOptions.hardMultiplier / 2)),
+    0,
+    false,
+  );
+  const goodInterval = constrainPassingInterval(
+    current,
+    deckOptions,
+    Math.max(elapsed * current.easeFactor, scheduledDays),
+    0,
+    false,
+  );
+  const reducedEasyBonus = deckOptions.easyBonus - (deckOptions.easyBonus - 1) / 2;
+  const easyInterval = constrainPassingInterval(
+    current,
+    deckOptions,
+    Math.max(elapsed * current.easeFactor, scheduledDays) * reducedEasyBonus,
+    0,
+    false,
+  );
+
+  return {
+    hard: hardInterval,
+    good: goodInterval,
+    easy: easyInterval,
+  };
+}
+
+function passingReviewIntervals(
+  current: CardState,
+  deckOptions: DeckOptions,
+  elapsedDays: number,
+): ReviewIntervals {
+  const scheduledDays = Math.max(1, Math.trunc(current.interval));
+  const daysLate = elapsedDays - scheduledDays;
+
+  if (daysLate < 0) {
+    return passingEarlyReviewIntervals(current, deckOptions, elapsedDays);
+  }
+
+  const currentInterval = Math.max(scheduledDays, 1);
+  const hardMinimum = deckOptions.hardMultiplier <= 1 ? 0 : scheduledDays + 1;
+  const hardInterval = constrainPassingInterval(
+    current,
+    deckOptions,
+    currentInterval * deckOptions.hardMultiplier,
+    hardMinimum,
+    true,
+  );
+
+  const goodMinimum = deckOptions.hardMultiplier <= 1 ? scheduledDays + 1 : hardInterval + 1;
+  const goodInterval = constrainPassingInterval(
+    current,
+    deckOptions,
+    (currentInterval + Math.max(0, daysLate) / 2) * current.easeFactor,
+    goodMinimum,
+    true,
+  );
+
+  const easyInterval = constrainPassingInterval(
+    current,
+    deckOptions,
+    (currentInterval + Math.max(0, daysLate)) * current.easeFactor * deckOptions.easyBonus,
+    goodInterval + 1,
+    true,
+  );
+
+  return {
+    hard: hardInterval,
+    good: goodInterval,
+    easy: easyInterval,
+  };
+}
+
+function failingReviewInterval(current: CardState, deckOptions: DeckOptions): number {
+  return reviewIntervalWithFuzz(
+    current,
+    deckOptions,
+    Math.max(1, Math.trunc(current.interval)) * deckOptions.lapseNewInterval,
+    deckOptions.minimumLapseInterval,
+  );
 }
 
 function processReview(
@@ -180,99 +390,58 @@ function processReview(
   schedulerPreferences: SchedulerPreferences,
   mode: SchedulingMode,
 ): CardState {
-  const currentInterval = Math.max(current.interval, 1);
-  const dueDate = new Date(current.due);
-  const daysLate = Math.max(0, Math.floor((now.getTime() - dueDate.getTime()) / 86400000));
-  const ease = current.easeFactor;
-  const im = deckOptions.intervalModifier;
-
-  const rawHard = Math.round(currentInterval * deckOptions.hardMultiplier * im);
-  const hardInterval = Math.max(current.interval + 1, rawHard);
-  const rawGood = Math.round((currentInterval + daysLate / 2) * ease * im);
-  const goodInterval = Math.max(hardInterval + 1, rawGood);
+  const elapsedDays = elapsedReviewDays(current, now, schedulerPreferences);
+  const intervals = passingReviewIntervals(current, deckOptions, elapsedDays);
 
   switch (rating) {
     case 'again': {
-      const newEase = Math.max(deckOptions.minEaseFactor, ease - 0.20);
-      const newInterval = Math.max(
-        deckOptions.minimumLapseInterval,
-        Math.round(currentInterval * deckOptions.lapseNewInterval * im),
-      );
+      const newEase = Math.max(AppConstants.minEaseFactor, current.easeFactor - 0.20);
+      const interval = failingReviewInterval(current, deckOptions);
       const steps = deckOptions.relearningStepsMinutes;
-      if (steps.length === 0) {
+      const delaySecs = againDelaySecs(steps);
+
+      if (delaySecs === undefined) {
         return copyState(current, {
           state: 'review',
           lapseCount: current.lapseCount + 1,
           easeFactor: newEase,
-          interval: newInterval,
-          due: dayDue(now, newInterval, schedulerPreferences).toISOString(),
+          interval,
+          due: dayDue(now, interval, schedulerPreferences).toISOString(),
         });
       }
+
       return copyState(current, {
         state: 'relearning',
         stepIndex: 0,
         lapseCount: current.lapseCount + 1,
         easeFactor: newEase,
-        interval: newInterval,
-        due: scheduleLearningDue(current, rating, now, steps[0], schedulerPreferences, mode),
+        interval,
+        due: scheduleLearningDue(current, now, delaySecs, schedulerPreferences, mode),
       });
     }
 
-    case 'hard': {
-      const newEase = Math.max(deckOptions.minEaseFactor, ease - 0.15);
-      const clamped = applyReviewFuzz(
-        current,
-        rating,
-        now,
-        hardInterval,
-        deckOptions.maximumInterval,
-        mode,
-      );
+    case 'hard':
       return copyState(current, {
         state: 'review',
-        easeFactor: newEase,
-        interval: clamped,
-        due: dayDue(now, clamped, schedulerPreferences).toISOString(),
-        repetition: current.repetition + 1,
+        easeFactor: Math.max(AppConstants.minEaseFactor, current.easeFactor - 0.15),
+        interval: intervals.hard,
+        due: dayDue(now, intervals.hard, schedulerPreferences).toISOString(),
       });
-    }
 
-    case 'good': {
-      const clamped = applyReviewFuzz(
-        current,
-        rating,
-        now,
-        goodInterval,
-        deckOptions.maximumInterval,
-        mode,
-      );
+    case 'good':
       return copyState(current, {
         state: 'review',
-        interval: clamped,
-        due: dayDue(now, clamped, schedulerPreferences).toISOString(),
-        repetition: current.repetition + 1,
+        interval: intervals.good,
+        due: dayDue(now, intervals.good, schedulerPreferences).toISOString(),
       });
-    }
 
-    case 'easy': {
-      const newEase = ease + 0.15;
-      const rawEasy = Math.round((currentInterval + daysLate) * ease * deckOptions.easyBonus * im);
-      const easyInterval = applyReviewFuzz(
-        current,
-        rating,
-        now,
-        Math.max(goodInterval + 1, rawEasy),
-        deckOptions.maximumInterval,
-        mode,
-      );
+    case 'easy':
       return copyState(current, {
         state: 'review',
-        easeFactor: newEase,
-        interval: easyInterval,
-        due: dayDue(now, easyInterval, schedulerPreferences).toISOString(),
-        repetition: current.repetition + 1,
+        easeFactor: current.easeFactor + 0.15,
+        interval: intervals.easy,
+        due: dayDue(now, intervals.easy, schedulerPreferences).toISOString(),
       });
-    }
   }
 }
 
@@ -287,46 +456,63 @@ function processRelearning(
   const steps = deckOptions.relearningStepsMinutes;
 
   switch (rating) {
-    case 'again':
-      return copyState(current, {
-        state: 'relearning',
-        stepIndex: 0,
-        due: scheduleLearningDue(current, rating, now, steps[0], schedulerPreferences, mode),
-      });
-
-    case 'hard': {
-      const currentIdx = Math.min(Math.max(current.stepIndex, 0), steps.length - 1);
-      return copyState(current, {
-        state: 'relearning',
-        stepIndex: currentIdx,
-        due: scheduleLearningDue(current, rating, now, steps[currentIdx], schedulerPreferences, mode),
-      });
-    }
-
-    case 'good': {
-      const nextStep = current.stepIndex + 1;
-      if (nextStep >= steps.length) {
+    case 'again': {
+      const delaySecs = againDelaySecs(steps);
+      const interval = failingReviewInterval(current, deckOptions);
+      if (delaySecs === undefined) {
         return copyState(current, {
           state: 'review',
-          due: dayDue(now, current.interval, schedulerPreferences).toISOString(),
-          repetition: current.repetition + 1,
+          interval,
+          due: dayDue(now, interval, schedulerPreferences).toISOString(),
           stepIndex: 0,
         });
       }
       return copyState(current, {
         state: 'relearning',
-        stepIndex: nextStep,
-        due: scheduleLearningDue(current, rating, now, steps[nextStep], schedulerPreferences, mode),
+        stepIndex: 0,
+        interval,
+        due: scheduleLearningDue(current, now, delaySecs, schedulerPreferences, mode),
+      });
+    }
+
+    case 'hard': {
+      const delaySecs = hardDelaySecs(steps, current.stepIndex);
+      if (delaySecs === undefined) {
+        return copyState(current, {
+          state: 'review',
+          due: dayDue(now, current.interval, schedulerPreferences).toISOString(),
+          stepIndex: 0,
+        });
+      }
+      return copyState(current, {
+        state: 'relearning',
+        stepIndex: currentStepIndex(steps, current.stepIndex),
+        due: scheduleLearningDue(current, now, delaySecs, schedulerPreferences, mode),
+      });
+    }
+
+    case 'good': {
+      const delaySecs = goodDelaySecs(steps, current.stepIndex);
+      if (delaySecs === undefined) {
+        return copyState(current, {
+          state: 'review',
+          due: dayDue(now, current.interval, schedulerPreferences).toISOString(),
+          stepIndex: 0,
+        });
+      }
+      return copyState(current, {
+        state: 'relearning',
+        stepIndex: nextStepIndex(steps, current.stepIndex),
+        due: scheduleLearningDue(current, now, delaySecs, schedulerPreferences, mode),
       });
     }
 
     case 'easy': {
-      const newInterval = current.interval + 1;
+      const interval = Math.min(Math.max(1, Math.trunc(deckOptions.maximumInterval)), current.interval + 1);
       return copyState(current, {
         state: 'review',
-        interval: newInterval,
-        due: dayDue(now, newInterval, schedulerPreferences).toISOString(),
-        repetition: current.repetition + 1,
+        interval,
+        due: dayDue(now, interval, schedulerPreferences).toISOString(),
         stepIndex: 0,
       });
     }
@@ -361,7 +547,12 @@ export function processRating(
       break;
   }
 
-  return { ...result, lastReviewedAt: updatedAt, updatedAt };
+  return {
+    ...result,
+    repetition: current.repetition + 1,
+    lastReviewedAt: updatedAt,
+    updatedAt,
+  };
 }
 
 export function previewDue(current: CardState, rating: Rating, now: Date, deckOptions: DeckOptions): Date {
